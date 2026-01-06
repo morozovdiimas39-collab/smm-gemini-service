@@ -1,0 +1,18 @@
+{
+  "tests": [
+    {
+      "name": "Test image generation",
+      "method": "POST",
+      "body": {
+        "task": "Красивый закат над морем",
+        "style": "фотореализм",
+        "aspectRatio": "квадрат"
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "imageUrl": "string"
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}

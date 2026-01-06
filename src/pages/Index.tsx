@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -89,6 +90,16 @@ export default function Index() {
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
             Создавайте идеальные посты для соцсетей с помощью AI
           </p>
+          <div className="flex gap-4 justify-center">
+            <Button variant="default" size="lg" className="font-semibold">
+              📝 Текст постов
+            </Button>
+            <Link to="/images">
+              <Button variant="outline" size="lg" className="font-semibold">
+                🎨 Изображения
+              </Button>
+            </Link>
+          </div>
         </div>
 
         <div className="grid md:grid-cols-2 gap-6">
