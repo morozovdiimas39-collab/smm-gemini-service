@@ -31,40 +31,31 @@ export default function Index() {
     setGeneratedPost('');
 
     try {
-      const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=AIzaSyCi5NWYP0_tnNYOXxyJxj6s2fL_KXxTsq4', {
+      const response = await fetch('https://functions.poehali.dev/697e7fd3-b2b2-4eb9-8b2d-c815f9756c06', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          contents: [{
-            parts: [{
-              text: `Создай пост для ${platform === 'telegram' ? 'Telegram' : platform === 'vk' ? 'ВКонтакте' : platform === 'instagram' ? 'Instagram' : 'социальной сети'}.
-
-Задача: ${task}
-
-Требования:
-- Тон: ${tone}
-- Цель поста: ${goal}
-- Длина: ${length === 'короткий' ? 'до 200 символов' : length === 'средний' ? '200-500 символов' : 'более 500 символов'}
-- Эмодзи: ${emojis === 'нет' ? 'не использовать эмодзи' : emojis === 'мало' ? 'использовать 1-2 эмодзи' : emojis === 'баланс' ? 'использовать 3-5 эмодзи' : 'использовать много эмодзи (8-12)'}
-
-Напиши готовый пост для ${platform === 'telegram' ? 'Telegram канала AnyaGPT' : platform === 'vk' ? 'группы AnyaGPT ВКонтакте' : platform === 'instagram' ? 'Instagram профиля AnyaGPT' : 'AnyaGPT'}. Только текст поста, без пояснений.`
-            }]
-          }]
+          platform,
+          task,
+          tone,
+          goal,
+          length,
+          emojis
         }),
       });
 
       const data = await response.json();
       
-      if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
-        setGeneratedPost(data.candidates[0].content.parts[0].text);
+      if (response.ok && data.post) {
+        setGeneratedPost(data.post);
         toast({
           title: 'Готово! 🎉',
           description: 'Пост успешно создан',
         });
       } else {
-        throw new Error('Не удалось получить ответ');
+        throw new Error(data.error || 'Не удалось получить ответ');
       }
     } catch (error) {
       toast({

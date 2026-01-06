@@ -1,0 +1,21 @@
+{
+  "tests": [
+    {
+      "name": "Test post generation",
+      "method": "POST",
+      "body": {
+        "platform": "telegram",
+        "task": "Рассказать о новой функции AnyaGPT",
+        "tone": "дружелюбный",
+        "goal": "информирование",
+        "length": "средний",
+        "emojis": "баланс"
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "post": "string"
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
