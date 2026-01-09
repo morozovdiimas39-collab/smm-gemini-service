@@ -117,6 +117,8 @@ export default function Documents() {
           mode: 'section',
           docType,
           subject,
+          pages,
+          topics,
           sectionTitle: 'Введение',
           sectionDescription: `Введение к ${docType} на тему "${subject}"`,
           additionalInfo
@@ -140,6 +142,8 @@ export default function Documents() {
             mode: 'section',
             docType,
             subject,
+            pages,
+            topics,
             sectionTitle: topic.title,
             sectionDescription: topic.description,
             additionalInfo
@@ -163,6 +167,8 @@ export default function Documents() {
           mode: 'section',
           docType,
           subject,
+          pages,
+          topics,
           sectionTitle: 'Заключение',
           sectionDescription: `Заключение к ${docType} на тему "${subject}"`,
           additionalInfo

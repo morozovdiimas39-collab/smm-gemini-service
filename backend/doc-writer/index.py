@@ -88,20 +88,34 @@ def handler(event: dict, context) -> dict:
 
 ВАЖНО: Верни ТОЛЬКО JSON, без дополнительного текста, markdown или комментариев!"""
         elif mode == 'section':
+            words_per_page = 300
+            total_words_needed = pages * words_per_page
+            sections_count = len(topics) if topics else 5
+            words_for_intro_conclusion = 400
+            words_for_sections = total_words_needed - words_for_intro_conclusion
+            words_per_section = words_for_sections // sections_count if sections_count > 0 else 500
+            
+            target_words = words_per_section
+            if 'введение' in section_title.lower() or 'заключение' in section_title.lower():
+                target_words = 200
+            
             prompt = f"""Напиши раздел для академического документа ({doc_type}) на тему: {subject}
 
 РАЗДЕЛ: {section_title}
 ОПИСАНИЕ: {section_description}
 
-ТРЕБОВАНИЯ:
-- Объем: 300-500 слов
+КРИТИЧНЫЕ ТРЕБОВАНИЯ:
+- Объем: СТРОГО {target_words} слов (это обязательно!)
 - Академический стиль, научная терминология
-- Логичное изложение с примерами
-- Раскрывай тему полностью
+- Логичное изложение с примерами и деталями
+- Раскрывай тему МАКСИМАЛЬНО подробно
 - Используй абзацы для структуры
+- Приводи конкретные примеры и факты
+- Пиши развернуто, не сокращай
 
 {f'Дополнительные требования: {additional_info}' if additional_info else ''}
 
+ВАЖНО: Текст должен быть РОВНО {target_words} слов! Не меньше!
 Напиши ТОЛЬКО текст раздела, без заголовка раздела."""
         else:
             topics_structure = '\n'.join([
