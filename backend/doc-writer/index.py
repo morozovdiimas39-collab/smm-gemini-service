@@ -1,9 +1,10 @@
 import json
 import os
-import google.generativeai as genai
+import urllib.request
+import urllib.error
 
 def handler(event: dict, context) -> dict:
-    '''Генерирует структуру или полный документ с помощью Gemini 2.5 Flash'''
+    '''Генерирует структуру или полный документ с помощью Gemini API'''
     
     method = event.get('httpMethod', 'POST')
     
@@ -64,13 +65,6 @@ def handler(event: dict, context) -> dict:
                 'isBase64Encoded': False
             }
         
-        if proxy_url:
-            os.environ['HTTP_PROXY'] = proxy_url
-            os.environ['HTTPS_PROXY'] = proxy_url
-        
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        
         if mode == 'topics':
             sections_count = max(3, pages // 3)
             prompt = f"""Создай структуру для документа типа "{doc_type}" на тему: {subject}
@@ -88,26 +82,9 @@ def handler(event: dict, context) -> dict:
 ]
 
 Без введения/заключения - только основные разделы.
-Названия лаконичные. Описания информативные (2-3 предложения).
+Названия лаконичные и конкретные. Описания информативные (2-3 предложения).
 
-ВАЖНО: Верни ТОЛЬКО JSON, без markdown или комментариев!"""
-            
-            response = model.generate_content(prompt)
-            result_text = response.text.strip()
-            
-            if result_text.startswith('```'):
-                lines = result_text.split('\n')
-                result_text = '\n'.join(lines[1:-1]) if len(lines) > 2 else result_text
-                result_text = result_text.replace('```json', '').replace('```', '').strip()
-            
-            topics_result = json.loads(result_text)
-            
-            return {
-                'statusCode': 200,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'topics': topics_result}, ensure_ascii=False),
-                'isBase64Encoded': False
-            }
+ВАЖНО: Верни ТОЛЬКО JSON, без дополнительного текста, markdown или комментариев!"""
         else:
             topics_structure = '\n'.join([
                 f"{i+1}. {topic['title']}\n   {topic['description']}"
@@ -151,20 +128,81 @@ def handler(event: dict, context) -> dict:
 
 Пиши подробно, раскрывай каждую тему полностью. Используй абзацы для структуры."""
 
-            response = model.generate_content(prompt)
-            document = response.text.strip()
+        gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}'
+        
+        gemini_request = {
+            'contents': [{
+                'parts': [{'text': prompt}]
+            }]
+        }
+        
+        req = urllib.request.Request(
+            gemini_url,
+            data=json.dumps(gemini_request).encode('utf-8'),
+            headers={'Content-Type': 'application/json'}
+        )
+        
+        if proxy_url:
+            proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
+            opener = urllib.request.build_opener(proxy_handler)
+            urllib.request.install_opener(opener)
+        
+        with urllib.request.urlopen(req, timeout=30) as response:
+            gemini_response = json.loads(response.read().decode('utf-8'))
+        
+        if 'candidates' in gemini_response and gemini_response['candidates']:
+            result_text = gemini_response['candidates'][0]['content']['parts'][0]['text'].strip()
             
+            if mode == 'topics':
+                if result_text.startswith('```'):
+                    lines = result_text.split('\n')
+                    result_text = '\n'.join(lines[1:-1]) if len(lines) > 2 else result_text
+                    result_text = result_text.replace('```json', '').replace('```', '').strip()
+                
+                topics_result = json.loads(result_text)
+                
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'topics': topics_result}, ensure_ascii=False),
+                    'isBase64Encoded': False
+                }
+            else:
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'document': result_text}, ensure_ascii=False),
+                    'isBase64Encoded': False
+                }
+        else:
             return {
-                'statusCode': 200,
+                'statusCode': 500,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'document': document}, ensure_ascii=False),
+                'body': json.dumps({'error': 'Не удалось получить ответ от Gemini'}),
                 'isBase64Encoded': False
             }
-        
+    
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8') if e.fp else 'Unknown error'
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'body': json.dumps({'error': f'Gemini API error: {e.code}', 'details': error_body}),
+            'isBase64Encoded': False
+        }
+    
+    except json.JSONDecodeError as e:
+        return {
+            'statusCode': 500,
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'body': json.dumps({'error': f'Ошибка парсинга: {str(e)}'}),
+            'isBase64Encoded': False
+        }
+    
     except Exception as e:
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': f'Ошибка генерации: {str(e)}'}),
+            'body': json.dumps({'error': f'Ошибка: {str(e)}'}),
             'isBase64Encoded': False
         }
