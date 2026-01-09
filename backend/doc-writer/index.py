@@ -99,7 +99,7 @@ def handler(event: dict, context) -> dict:
             target_words = pages * words_per_page
             words_per_section = target_words // len(topics)
             
-            words_limit = min(target_words, 3000)
+            words_limit = min(target_words, 2000)
             
             prompt = f"""Напиши академический {doc_type} на тему: {subject}
 
@@ -151,8 +151,16 @@ def handler(event: dict, context) -> dict:
             opener = urllib.request.build_opener(proxy_handler)
             urllib.request.install_opener(opener)
         
-        with urllib.request.urlopen(req, timeout=25) as response:
-            gemini_response = json.loads(response.read().decode('utf-8'))
+        try:
+            with urllib.request.urlopen(req, timeout=20) as response:
+                gemini_response = json.loads(response.read().decode('utf-8'))
+        except Exception as timeout_err:
+            return {
+                'statusCode': 500,
+                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'body': json.dumps({'error': 'Слишком большой документ. Уменьшите количество страниц до 10-15'}),
+                'isBase64Encoded': False
+            }
         
         if 'candidates' in gemini_response and gemini_response['candidates']:
             result_text = gemini_response['candidates'][0]['content']['parts'][0]['text'].strip()
