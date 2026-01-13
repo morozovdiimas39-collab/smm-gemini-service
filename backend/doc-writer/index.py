@@ -3,6 +3,12 @@ import os
 import urllib.request
 import urllib.error
 import re
+import sys
+
+def count_russian_words(text: str) -> int:
+    '''Корректный подсчёт русских слов'''
+    words = re.findall(r'\b[а-яёА-ЯЁa-zA-Z]+\b', text)
+    return len(words)
 
 def humanize_text(text: str) -> str:
     '''Пост-процессинг: заменяет AI-фразы на человечные'''
@@ -299,13 +305,23 @@ def handler(event: dict, context) -> dict:
             if 'введение' in section_title.lower() or 'заключение' in section_title.lower():
                 target_words = 200
             
+            print(f"[GENERATION] Раздел: {section_title}", file=sys.stderr)
+            print(f"[GENERATION] Целевой объём: {target_words} слов", file=sys.stderr)
+            print(f"[GENERATION] Качество: {quality_level}, попыток: {settings['max_attempts']}", file=sys.stderr)
+            
             base_prompt = f"""Ты студент, который пишет {doc_type} на тему: {subject}
 
 РАЗДЕЛ: {section_title}
 О ЧЕМ ПИСАТЬ: {section_description}
 
-ТРЕБОВАНИЯ К ОБЪЕМУ:
-- Ровно {target_words} слов (не меньше!)
+⚠️⚠️⚠️ КРИТИЧНЫЙ ОБЪЕМ: {target_words} СЛОВ МИНИМУМ! ⚠️⚠️⚠️
+
+НЕ СМЕЙ останавливаться раньше {target_words} слов! Если раскрыл тему за меньшее количество — добавь:
+- Больше примеров
+- Дополнительные аргументы
+- Конкретные кейсы
+- Статистику и исследования
+- Подробное объяснение механизмов
 
 КАК ПИСАТЬ (КРИТИЧНО ВАЖНО):
 1. Пиши ПРОСТЫМ языком, как объясняешь другу
@@ -329,7 +345,8 @@ def handler(event: dict, context) -> dict:
 
 ВАЖНО: 
 - Текст должен звучать как написал человек, а не робот
-- {target_words} слов - строго!
+- {target_words} слов - ОБЯЗАТЕЛЬНО! Это не рекомендация, это требование!
+- Если не уверен что набрал {target_words} слов — продолжай писать!
 - Напиши ТОЛЬКО текст раздела без заголовка"""
 
             max_attempts = settings['max_attempts']
@@ -337,20 +354,30 @@ def handler(event: dict, context) -> dict:
             best_scores = {'ai_score': 100, 'uniqueness_score': 0}
             
             for attempt in range(1, max_attempts + 1):
+                print(f"\n[ATTEMPT {attempt}/{max_attempts}] Генерация...", file=sys.stderr)
+                
                 prompt = improve_text_prompt(base_prompt, attempt, quality_level)
                 result_text = generate_with_gemini(prompt, api_key, proxy_url)
                 result_text = humanize_text(result_text)
+                
+                word_count = count_russian_words(result_text)
+                print(f"[ATTEMPT {attempt}] Сгенерировано слов: {word_count}/{target_words}", file=sys.stderr)
                 
                 try:
                     scores = check_content_quality(result_text, api_key, proxy_url)
                     ai_score = scores.get('ai_score', 50)
                     uniqueness_score = scores.get('uniqueness_score', 50)
                     
+                    print(f"[ATTEMPT {attempt}] AI-score: {ai_score}%, Уникальность: {uniqueness_score}%", file=sys.stderr)
+                    print(f"[ATTEMPT {attempt}] Пороги: AI < {settings['ai_threshold']}%, Уникальность > {settings['uniqueness_threshold']}%", file=sys.stderr)
+                    
                     if ai_score < best_scores['ai_score'] or uniqueness_score > best_scores['uniqueness_score']:
                         best_text = result_text
                         best_scores = {'ai_score': ai_score, 'uniqueness_score': uniqueness_score}
+                        print(f"[ATTEMPT {attempt}] ✓ Новый лучший результат", file=sys.stderr)
                     
                     if ai_score < settings['ai_threshold'] and uniqueness_score > settings['uniqueness_threshold']:
+                        print(f"[ATTEMPT {attempt}] ✓✓✓ ПРОХОД! Качество достигнуто", file=sys.stderr)
                         return {
                             'statusCode': 200,
                             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
@@ -365,9 +392,15 @@ def handler(event: dict, context) -> dict:
                             }, ensure_ascii=False),
                             'isBase64Encoded': False
                         }
-                except Exception:
+                    else:
+                        print(f"[ATTEMPT {attempt}] ✗ Не прошло, пробуем снова", file=sys.stderr)
+                except Exception as e:
+                    print(f"[ATTEMPT {attempt}] Ошибка проверки: {str(e)}", file=sys.stderr)
                     if best_text is None:
                         best_text = result_text
+            
+            print(f"\n[FINAL] Использован лучший из {max_attempts} вариантов", file=sys.stderr)
+            print(f"[FINAL] AI-score: {best_scores['ai_score']}%, Уникальность: {best_scores['uniqueness_score']}%", file=sys.stderr)
             
             return {
                 'statusCode': 200,
