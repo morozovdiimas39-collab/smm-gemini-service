@@ -4,6 +4,7 @@ import urllib.request
 import urllib.error
 import re
 import sys
+import time
 
 def count_russian_words(text: str) -> int:
     '''Корректный подсчёт русских слов'''
@@ -249,9 +250,9 @@ def handler(event: dict, context) -> dict:
             }
         
         quality_settings = {
-            'standard': {'max_attempts': 3, 'ai_threshold': 70, 'uniqueness_threshold': 40},
-            'high': {'max_attempts': 4, 'ai_threshold': 50, 'uniqueness_threshold': 70},
-            'max': {'max_attempts': 5, 'ai_threshold': 40, 'uniqueness_threshold': 75}
+            'standard': {'max_attempts': 1, 'ai_threshold': 100, 'uniqueness_threshold': 0},
+            'high': {'max_attempts': 2, 'ai_threshold': 60, 'uniqueness_threshold': 60},
+            'max': {'max_attempts': 3, 'ai_threshold': 50, 'uniqueness_threshold': 70}
         }
         
         settings = quality_settings.get(quality_level, quality_settings['high'])
@@ -355,6 +356,9 @@ def handler(event: dict, context) -> dict:
             
             for attempt in range(1, max_attempts + 1):
                 print(f"\n[ATTEMPT {attempt}/{max_attempts}] Генерация...", file=sys.stderr)
+                
+                if attempt > 1:
+                    time.sleep(2)
                 
                 prompt = improve_text_prompt(base_prompt, attempt, quality_level)
                 result_text = generate_with_gemini(prompt, api_key, proxy_url)
