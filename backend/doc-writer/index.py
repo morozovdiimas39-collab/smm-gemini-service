@@ -7,7 +7,6 @@ import re
 def humanize_text(text: str) -> str:
     '''Пост-процессинг: заменяет AI-фразы на человечные'''
     
-    # Словарь замен типичных AI-паттернов
     ai_phrases = {
         r'\bв современном мире\b': 'сейчас',
         r'\bв настоящее время\b': 'сегодня',
@@ -34,7 +33,6 @@ def humanize_text(text: str) -> str:
     for pattern, replacement in ai_phrases.items():
         result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
     
-    # Убираем двойные пробелы
     result = re.sub(r'\s+', ' ', result)
     result = re.sub(r'\s+([.,;:!?])', r'\1', result)
     
@@ -99,9 +97,7 @@ def improve_text_prompt(original_prompt: str, iteration: int, quality_level: str
     if iteration == 1:
         return original_prompt
     
-    # Радикально разные подходы для каждой попытки
     strategies = [
-        # Попытка 2: Разговорный стиль
         """
 НОВЫЙ ПОДХОД: Забудь про академичность. Пиши как студент, который реально разбирается в теме.
 
@@ -112,7 +108,6 @@ def improve_text_prompt(original_prompt: str, iteration: int, quality_level: str
 - Используй "это", "есть", "делает" вместо "представляет собой", "является", "осуществляет"
 - НЕ используй: "в современном мире", "важно отметить", "следует подчеркнуть"
 """,
-        # Попытка 3: Полное переосмысление
         """
 КРИТИЧНО: ПОЛНОСТЬЮ переосмысли тему. НЕ копируй предыдущий текст!
 
@@ -123,7 +118,6 @@ def improve_text_prompt(original_prompt: str, iteration: int, quality_level: str
 - Добавь неожиданные сравнения
 - Используй активный залог: "AI помогает", а не "с помощью AI осуществляется помощь"
 """,
-        # Попытка 4: Живой язык
         """
 МАКСИМАЛЬНАЯ ЕСТЕСТВЕННОСТЬ:
 
@@ -134,7 +128,6 @@ def improve_text_prompt(original_prompt: str, iteration: int, quality_level: str
 - Пиши так, как будто ты автор, который лично исследовал тему
 - Добавь личные наблюдения: "интересно, что...", "на практике видно..."
 """,
-        # Попытка 5: Уникальный стиль
         """
 ФИНАЛЬНАЯ ПОПЫТКА - АБСОЛЮТНАЯ УНИКАЛЬНОСТЬ:
 
@@ -174,10 +167,10 @@ def generate_with_gemini(prompt: str, api_key: str, proxy_url: str = None) -> st
         urllib.request.install_opener(opener)
     
     try:
-        with urllib.request.urlopen(req, timeout=20) as response:
+        with urllib.request.urlopen(req, timeout=60) as response:
             gemini_response = json.loads(response.read().decode('utf-8'))
-    except Exception:
-        raise Exception('Слишком большой документ. Уменьшите количество страниц до 10-15')
+    except Exception as e:
+        raise Exception(f'Ошибка API: {str(e)}')
     
     if 'candidates' in gemini_response and gemini_response['candidates']:
         return gemini_response['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -249,7 +242,6 @@ def handler(event: dict, context) -> dict:
                 'isBase64Encoded': False
             }
         
-        # Настройки по уровню качества
         quality_settings = {
             'standard': {'max_attempts': 3, 'ai_threshold': 70, 'uniqueness_threshold': 40},
             'high': {'max_attempts': 4, 'ai_threshold': 50, 'uniqueness_threshold': 70},
@@ -307,7 +299,6 @@ def handler(event: dict, context) -> dict:
             if 'введение' in section_title.lower() or 'заключение' in section_title.lower():
                 target_words = 200
             
-            # РАДИКАЛЬНО НОВЫЙ ПРОМПТ - человечный стиль
             base_prompt = f"""Ты студент, который пишет {doc_type} на тему: {subject}
 
 РАЗДЕЛ: {section_title}
@@ -341,7 +332,6 @@ def handler(event: dict, context) -> dict:
 - {target_words} слов - строго!
 - Напиши ТОЛЬКО текст раздела без заголовка"""
 
-            # Генерация с автопроверкой
             max_attempts = settings['max_attempts']
             best_text = None
             best_scores = {'ai_score': 100, 'uniqueness_score': 0}
@@ -349,22 +339,17 @@ def handler(event: dict, context) -> dict:
             for attempt in range(1, max_attempts + 1):
                 prompt = improve_text_prompt(base_prompt, attempt, quality_level)
                 result_text = generate_with_gemini(prompt, api_key, proxy_url)
-                
-                # Пост-процессинг: убираем AI-фразы
                 result_text = humanize_text(result_text)
                 
-                # Проверяем качество
                 try:
                     scores = check_content_quality(result_text, api_key, proxy_url)
                     ai_score = scores.get('ai_score', 50)
                     uniqueness_score = scores.get('uniqueness_score', 50)
                     
-                    # Сохраняем лучший результат
                     if ai_score < best_scores['ai_score'] or uniqueness_score > best_scores['uniqueness_score']:
                         best_text = result_text
                         best_scores = {'ai_score': ai_score, 'uniqueness_score': uniqueness_score}
                     
-                    # Проверяем по порогам уровня качества
                     if ai_score < settings['ai_threshold'] and uniqueness_score > settings['uniqueness_threshold']:
                         return {
                             'statusCode': 200,
@@ -384,7 +369,6 @@ def handler(event: dict, context) -> dict:
                     if best_text is None:
                         best_text = result_text
             
-            # Возвращаем лучший результат
             return {
                 'statusCode': 200,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
@@ -406,46 +390,53 @@ def handler(event: dict, context) -> dict:
                 for i, topic in enumerate(topics)
             ])
             
-            chars_per_page = 1800
-            target_chars = pages * chars_per_page
-            chars_per_section = target_chars // len(topics)
-            
             words_per_page = 300
             target_words = pages * words_per_page
-            words_per_section = target_words // len(topics)
             
-            words_limit = min(target_words, 2000)
-            
-            prompt = f"""Напиши академический {doc_type} на тему: {subject}
+            prompt = f"""Напиши {doc_type} на тему: {subject}
 
-СТРУКТУРА ДОКУМЕНТА:
+СТРУКТУРА ({len(topics)} разделов):
 {topics_structure}
 
-ТРЕБОВАНИЯ:
-- Объем: МАКСИМУМ {words_limit} слов (это критично!)
-- Академический стиль, научная терминология
-- Логичное изложение с ключевыми моментами
-- НЕ нужно оглавление, список литературы или титульный лист
-- Начинай сразу с введения
+ОБЪЕМ: {target_words} слов (~{pages} страниц A4)
+Это примерно {target_words // len(topics)} слов на каждый раздел.
 
-{f'Дополнительные требования: {additional_info}' if additional_info else ''}
+СТИЛЬ:
+- Пиши как хороший студент, который ПОНИМАЕТ тему
+- Объясняй простым языком, как другу
+- Используй примеры, факты, цифры
+- Чередуй короткие и длинные предложения
+- Пиши активным залогом: "AI помогает", а не "помощь осуществляется"
 
-Формат ответа:
+ЗАПРЕЩЕНО использовать:
+❌ "в современном мире" ❌ "важно отметить" ❌ "представляет собой"
+❌ "осуществляется" ❌ "в настоящее время" ❌ "данный"
+❌ "является" ❌ "позволяет" ❌ "необходимо подчеркнуть"
+
+ВМЕСТО ЭТОГО:
+✅ Конкретика: "в 2024 году", "по данным исследований"
+✅ Живые фразы: "интересно, что...", "на практике...", "важный момент:"
+✅ Короткие слова: "этот", "есть", "дает", "сегодня"
+
+{f'Дополнительно: {additional_info}' if additional_info else ''}
+
+ФОРМАТ:
+
 ВВЕДЕНИЕ
-[2 абзаца]
+[2-3 абзаца, ~{target_words // len(topics) // 2} слов]
 
-1. [Название первого раздела]
-[основной текст]
+1. [Название раздела]
+[Подробный текст, ~{target_words // len(topics)} слов]
 
-2. [Название второго раздела]
-[основной текст]
+2. [Название раздела]
+[Подробный текст, ~{target_words // len(topics)} слов]
 
 ...
 
 ЗАКЛЮЧЕНИЕ
-[2 абзаца]
+[2-3 абзаца, ~{target_words // len(topics) // 2} слов]
 
-КРИТИЧНО: Уложись в {words_limit} слов! Пиши только главное."""
+⚠️ КРИТИЧНО: Пиши ПОЛНЫЙ объем {target_words} слов! Не сокращай!"""
 
             result_text = generate_with_gemini(prompt, api_key, proxy_url)
             result_text = humanize_text(result_text)
@@ -456,14 +447,7 @@ def handler(event: dict, context) -> dict:
                 'body': json.dumps({'document': result_text}, ensure_ascii=False),
                 'isBase64Encoded': False
             }
-        
-    except json.JSONDecodeError:
-        return {
-            'statusCode': 400,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': 'Некорректный JSON'}),
-            'isBase64Encoded': False
-        }
+            
     except Exception as e:
         return {
             'statusCode': 500,
