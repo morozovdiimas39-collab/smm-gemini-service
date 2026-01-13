@@ -24,6 +24,7 @@ export default function Documents() {
   const [isGeneratingDocument, setIsGeneratingDocument] = useState(false);
   const [generationProgress, setGenerationProgress] = useState(0);
   const [generatedDocument, setGeneratedDocument] = useState('');
+  const [qualityScore, setQualityScore] = useState<{ai_score: number, uniqueness_score: number, attempts: number, passed: boolean} | null>(null);
 
   const generateTopics = async () => {
     if (!subject.trim()) {
@@ -129,6 +130,9 @@ export default function Documents() {
         fullDocument += introData.text + '\n\n';
         setGeneratedDocument(fullDocument);
       }
+      if (introData.quality) {
+        setQualityScore(introData.quality);
+      }
       setGenerationProgress(Math.floor((1 / (topics.length + 2)) * 100));
 
       for (let i = 0; i < topics.length; i++) {
@@ -155,6 +159,9 @@ export default function Documents() {
           fullDocument += sectionData.text + '\n\n';
           setGeneratedDocument(fullDocument);
         }
+        if (sectionData.quality) {
+          setQualityScore(sectionData.quality);
+        }
         
         setGenerationProgress(Math.floor(((i + 2) / (topics.length + 2)) * 100));
       }
@@ -178,6 +185,9 @@ export default function Documents() {
       if (conclusionData.text) {
         fullDocument += conclusionData.text + '\n\n';
         setGeneratedDocument(fullDocument);
+      }
+      if (conclusionData.quality) {
+        setQualityScore(conclusionData.quality);
       }
       
       setGenerationProgress(100);
@@ -448,6 +458,52 @@ export default function Documents() {
                     </Button>
                   </div>
                 </div>
+                
+                {qualityScore && (
+                  <div className="flex gap-3 p-4 bg-gradient-to-r from-primary/10 to-secondary/10 rounded-lg border border-primary/20">
+                    <div className="flex-1 text-center">
+                      <div className="text-sm text-muted-foreground mb-1">AI-детекция</div>
+                      <div className={`text-2xl font-bold ${
+                        qualityScore.ai_score < 50 ? 'text-green-600' : 
+                        qualityScore.ai_score < 70 ? 'text-yellow-600' : 'text-red-600'
+                      }`}>
+                        {qualityScore.ai_score}%
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {qualityScore.ai_score < 50 ? '✅ Естественно' : 
+                         qualityScore.ai_score < 70 ? '⚠️ Средне' : '❌ Похоже на AI'}
+                      </div>
+                    </div>
+                    
+                    <div className="w-px bg-border"></div>
+                    
+                    <div className="flex-1 text-center">
+                      <div className="text-sm text-muted-foreground mb-1">Уникальность</div>
+                      <div className={`text-2xl font-bold ${
+                        qualityScore.uniqueness_score > 70 ? 'text-green-600' : 
+                        qualityScore.uniqueness_score > 40 ? 'text-yellow-600' : 'text-red-600'
+                      }`}>
+                        {qualityScore.uniqueness_score}%
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {qualityScore.uniqueness_score > 70 ? '✅ Оригинально' : 
+                         qualityScore.uniqueness_score > 40 ? '⚠️ Средне' : '❌ Шаблонно'}
+                      </div>
+                    </div>
+                    
+                    <div className="w-px bg-border"></div>
+                    
+                    <div className="flex-1 text-center">
+                      <div className="text-sm text-muted-foreground mb-1">Попытки</div>
+                      <div className="text-2xl font-bold text-primary">
+                        {qualityScore.attempts}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">
+                        {qualityScore.passed ? '✅ Прошло' : '⚠️ Не прошло'}
+                      </div>
+                    </div>
+                  </div>
+                )}
                 
                 <div className="bg-muted/50 rounded-lg p-4 max-h-[600px] overflow-y-auto">
                   <pre className="whitespace-pre-wrap text-sm font-mono">{generatedDocument}</pre>

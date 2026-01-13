@@ -1,0 +1,20 @@
+{
+  "tests": [
+    {
+      "name": "Test content analysis",
+      "method": "POST",
+      "body": {
+        "text": "Искусственный интеллект представляет собой важную область современной науки. Данная технология активно развивается и внедряется в различные сферы жизни. Машинное обучение является ключевым направлением исследований."
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "ai_score": "number",
+        "uniqueness_score": "number",
+        "passed": "boolean",
+        "ai_indicators": "array",
+        "improvement_tips": "array"
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
