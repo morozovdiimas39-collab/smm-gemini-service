@@ -56,17 +56,35 @@ def check_content_quality(text: str, api_key: str, proxy_url: str = None) -> dic
     
     return {'ai_score': 50, 'uniqueness_score': 50}
 
-def improve_text_prompt(original_prompt: str, iteration: int) -> str:
-    '''Создает улучшенный промпт для перегенерации'''
-    improvements = [
-        "Перепиши текст более естественно, избегая шаблонных фраз и AI-паттернов. Добавь больше конкретики и примеров.",
-        "Сделай текст более человечным: используй разнообразные конструкции, избегай повторов, добавь индивидуальности в стиль.",
-        "Полностью переформулируй, используя оригинальные выражения. Пиши как живой человек, а не как AI."
-    ]
+def improve_text_prompt(original_prompt: str, iteration: int, quality_level: str) -> str:
+    '''Создает улучшенный промпт для перегенерации с учетом уровня качества'''
     
+    base_improvements = {
+        'standard': [
+            "Перепиши текст более естественно, избегая шаблонных фраз.",
+            "Добавь разнообразия в конструкции предложений.",
+            "Используй более живой язык."
+        ],
+        'high': [
+            "Перепиши текст значительно более естественно, избегая любых AI-паттернов. Добавь конкретные примеры.",
+            "Сделай текст более человечным: используй разнообразные конструкции, избегай повторов, добавь индивидуальности.",
+            "Полностью переформулируй с оригинальными выражениями. Пиши как эксперт в теме.",
+            "Используй неожиданные сравнения и метафоры. Добавь больше деталей и нюансов.",
+            "Пиши максимально естественно, как будто это пишет увлеченный темой человек."
+        ],
+        'max': [
+            "КРИТИЧНО: Текст должен быть полностью оригинальным и естественным. Избегай ЛЮБЫХ шаблонов AI. Пиши уникально!",
+            "Переосмысли тему полностью. Используй неожиданные подходы, свежие аргументы, оригинальные примеры.",
+            "Пиши как настоящий эксперт с личным опытом. Добавь неформальности, живости, индивидуального стиля.",
+            "Максимальная оригинальность: избегай клише, используй редкие обороты, придумай свои формулировки.",
+            "Финальная версия: абсолютная естественность, как будто текст писал человек несколько часов."
+        ]
+    }
+    
+    improvements = base_improvements.get(quality_level, base_improvements['high'])
     improvement_text = improvements[min(iteration - 1, len(improvements) - 1)]
     
-    return f"{original_prompt}\n\nДОПОЛНИТЕЛЬНО: {improvement_text}"
+    return f"{original_prompt}\n\nКРИТИЧНО ВАЖНО: {improvement_text}"
 
 def generate_with_gemini(prompt: str, api_key: str, proxy_url: str = None) -> str:
     '''Генерирует текст через Gemini API'''
@@ -136,6 +154,7 @@ def handler(event: dict, context) -> dict:
         additional_info = body.get('additionalInfo', '')
         section_title = body.get('sectionTitle', '')
         section_description = body.get('sectionDescription', '')
+        quality_level = body.get('qualityLevel', 'high')
         
         if not subject:
             return {
@@ -163,6 +182,15 @@ def handler(event: dict, context) -> dict:
                 'body': json.dumps({'error': 'API ключ не настроен'}),
                 'isBase64Encoded': False
             }
+        
+        # Настройки по уровню качества
+        quality_settings = {
+            'standard': {'max_attempts': 3, 'ai_threshold': 70, 'uniqueness_threshold': 40},
+            'high': {'max_attempts': 4, 'ai_threshold': 50, 'uniqueness_threshold': 70},
+            'max': {'max_attempts': 5, 'ai_threshold': 30, 'uniqueness_threshold': 80}
+        }
+        
+        settings = quality_settings.get(quality_level, quality_settings['high'])
         
         if mode == 'topics':
             sections_count = max(3, pages // 3)
@@ -213,12 +241,13 @@ def handler(event: dict, context) -> dict:
             if 'введение' in section_title.lower() or 'заключение' in section_title.lower():
                 target_words = 200
             
+            # Улучшенный базовый промпт с инструкциями для естественности
             base_prompt = f"""Напиши раздел для академического документа ({doc_type}) на тему: {subject}
 
 РАЗДЕЛ: {section_title}
 ОПИСАНИЕ: {section_description}
 
-КРИТИЧНЫЕ ТРЕБОВАНИЯ:
+КРИТИЧНЫЕ ТРЕБОВАНИЯ К СОДЕРЖАНИЮ:
 - Объем: СТРОГО {target_words} слов (это обязательно!)
 - Академический стиль, научная терминология
 - Логичное изложение с примерами и деталями
@@ -227,18 +256,28 @@ def handler(event: dict, context) -> dict:
 - Приводи конкретные примеры и факты
 - Пиши развернуто, не сокращай
 
+КРИТИЧНЫЕ ТРЕБОВАНИЯ К СТИЛЮ (для прохождения AI-детекции):
+- ИЗБЕГАЙ шаблонных фраз типа "в современном мире", "в настоящее время", "важно отметить"
+- Используй РАЗНООБРАЗНЫЕ конструкции предложений (не только сложноподчиненные)
+- Добавляй КОНКРЕТИКУ: цифры, даты, имена, реальные примеры
+- Пиши ЕСТЕСТВЕННО, как пишет увлеченный темой человек
+- НЕ повторяй одинаковые речевые обороты
+- Используй неожиданные сравнения и метафоры где уместно
+- Варьируй длину предложений (короткие и длинные)
+- Добавь индивидуальности: личные наблюдения, интересные детали
+
 {f'Дополнительные требования: {additional_info}' if additional_info else ''}
 
 ВАЖНО: Текст должен быть РОВНО {target_words} слов! Не меньше!
 Напиши ТОЛЬКО текст раздела, без заголовка раздела."""
 
-            # Генерация с автопроверкой (до 3 попыток)
-            max_attempts = 3
+            # Генерация с автопроверкой
+            max_attempts = settings['max_attempts']
             best_text = None
             best_scores = {'ai_score': 100, 'uniqueness_score': 0}
             
             for attempt in range(1, max_attempts + 1):
-                prompt = improve_text_prompt(base_prompt, attempt) if attempt > 1 else base_prompt
+                prompt = improve_text_prompt(base_prompt, attempt, quality_level) if attempt > 1 else base_prompt
                 result_text = generate_with_gemini(prompt, api_key, proxy_url)
                 
                 # Проверяем качество
@@ -252,8 +291,8 @@ def handler(event: dict, context) -> dict:
                         best_text = result_text
                         best_scores = {'ai_score': ai_score, 'uniqueness_score': uniqueness_score}
                     
-                    # Если прошли проверку - возвращаем сразу
-                    if ai_score < 50 and uniqueness_score > 70:
+                    # Проверяем по порогам уровня качества
+                    if ai_score < settings['ai_threshold'] and uniqueness_score > settings['uniqueness_threshold']:
                         return {
                             'statusCode': 200,
                             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
@@ -269,7 +308,6 @@ def handler(event: dict, context) -> dict:
                             'isBase64Encoded': False
                         }
                 except Exception:
-                    # Если проверка не удалась, используем текущий текст
                     if best_text is None:
                         best_text = result_text
             

@@ -19,6 +19,7 @@ export default function Documents() {
   const [subject, setSubject] = useState('');
   const [pages, setPages] = useState(10);
   const [additionalInfo, setAdditionalInfo] = useState('');
+  const [qualityLevel, setQualityLevel] = useState<'standard' | 'high' | 'max'>('high');
   const [topics, setTopics] = useState<Topic[]>([]);
   const [isGeneratingTopics, setIsGeneratingTopics] = useState(false);
   const [isGeneratingDocument, setIsGeneratingDocument] = useState(false);
@@ -122,7 +123,8 @@ export default function Documents() {
           topics,
           sectionTitle: 'Введение',
           sectionDescription: `Введение к ${docType} на тему "${subject}"`,
-          additionalInfo
+          additionalInfo,
+          qualityLevel
         }),
       });
       const introData = await introResponse.json();
@@ -150,7 +152,8 @@ export default function Documents() {
             topics,
             sectionTitle: topic.title,
             sectionDescription: topic.description,
-            additionalInfo
+            additionalInfo,
+            qualityLevel
           }),
         });
         
@@ -178,7 +181,8 @@ export default function Documents() {
           topics,
           sectionTitle: 'Заключение',
           sectionDescription: `Заключение к ${docType} на тему "${subject}"`,
-          additionalInfo
+          additionalInfo,
+          qualityLevel
         }),
       });
       const conclusionData = await conclusionResponse.json();
@@ -214,6 +218,121 @@ export default function Documents() {
       title: 'Скопировано! 📋',
       description: 'Документ скопирован в буфер обмена',
     });
+  };
+
+  const improveQuality = async () => {
+    if (!generatedDocument) return;
+    
+    setIsGeneratingDocument(true);
+    setGenerationProgress(0);
+    
+    try {
+      toast({
+        title: 'Улучшаем качество...',
+        description: 'Перегенерируем документ с повышенными требованиями',
+      });
+      
+      let fullDocument = `${docType.toUpperCase()}\n\nТема: ${subject}\n\n`;
+      
+      fullDocument += 'ВВЕДЕНИЕ\n\n';
+      const introResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'section',
+          docType,
+          subject,
+          pages,
+          topics,
+          sectionTitle: 'Введение',
+          sectionDescription: `Введение к ${docType} на тему "${subject}"`,
+          additionalInfo,
+          qualityLevel: 'max'
+        }),
+      });
+      const introData = await introResponse.json();
+      if (introData.text) {
+        fullDocument += introData.text + '\n\n';
+        setGeneratedDocument(fullDocument);
+      }
+      if (introData.quality) {
+        setQualityScore(introData.quality);
+      }
+      setGenerationProgress(Math.floor((1 / (topics.length + 2)) * 100));
+
+      for (let i = 0; i < topics.length; i++) {
+        const topic = topics[i];
+        fullDocument += `${i + 1}. ${topic.title.toUpperCase()}\n\n`;
+        
+        const sectionResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: 'section',
+            docType,
+            subject,
+            pages,
+            topics,
+            sectionTitle: topic.title,
+            sectionDescription: topic.description,
+            additionalInfo,
+            qualityLevel: 'max'
+          }),
+        });
+        
+        const sectionData = await sectionResponse.json();
+        if (sectionData.text) {
+          fullDocument += sectionData.text + '\n\n';
+          setGeneratedDocument(fullDocument);
+        }
+        if (sectionData.quality) {
+          setQualityScore(sectionData.quality);
+        }
+        
+        setGenerationProgress(Math.floor(((i + 2) / (topics.length + 2)) * 100));
+      }
+
+      fullDocument += 'ЗАКЛЮЧЕНИЕ\n\n';
+      const conclusionResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'section',
+          docType,
+          subject,
+          pages,
+          topics,
+          sectionTitle: 'Заключение',
+          sectionDescription: `Заключение к ${docType} на тему "${subject}"`,
+          additionalInfo,
+          qualityLevel: 'max'
+        }),
+      });
+      const conclusionData = await conclusionResponse.json();
+      if (conclusionData.text) {
+        fullDocument += conclusionData.text + '\n\n';
+        setGeneratedDocument(fullDocument);
+      }
+      if (conclusionData.quality) {
+        setQualityScore(conclusionData.quality);
+      }
+      
+      setGenerationProgress(100);
+      toast({
+        title: 'Улучшено! ✨',
+        description: 'Документ перегенерирован с максимальным качеством',
+      });
+    } catch (error) {
+      toast({
+        title: 'Ошибка',
+        description: 'Не удалось улучшить качество',
+        variant: 'destructive',
+      });
+      console.error(error);
+    } finally {
+      setIsGeneratingDocument(false);
+      setGenerationProgress(0);
+    }
   };
 
   const downloadDocument = () => {
@@ -318,6 +437,59 @@ export default function Documents() {
                     className="flex-1"
                   />
                   <span className="text-sm font-medium w-16 text-right">{pages} стр.</span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-lg font-semibold flex items-center gap-2">
+                  <Icon name="Sparkles" size={20} className="text-primary" />
+                  Уровень качества
+                </Label>
+                <div className="grid grid-cols-3 gap-3">
+                  <button
+                    onClick={() => setQualityLevel('standard')}
+                    className={`p-4 rounded-lg border-2 transition-all ${
+                      qualityLevel === 'standard' 
+                        ? 'border-green-500 bg-green-50' 
+                        : 'border-gray-200 hover:border-green-300'
+                    }`}
+                  >
+                    <div className="text-2xl mb-1">🟢</div>
+                    <div className="font-semibold text-sm">Стандарт</div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Быстро, AI &lt; 70%
+                    </div>
+                  </button>
+                  
+                  <button
+                    onClick={() => setQualityLevel('high')}
+                    className={`p-4 rounded-lg border-2 transition-all ${
+                      qualityLevel === 'high' 
+                        ? 'border-yellow-500 bg-yellow-50' 
+                        : 'border-gray-200 hover:border-yellow-300'
+                    }`}
+                  >
+                    <div className="text-2xl mb-1">🟡</div>
+                    <div className="font-semibold text-sm">Высокое</div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Средне, AI &lt; 50%
+                    </div>
+                  </button>
+                  
+                  <button
+                    onClick={() => setQualityLevel('max')}
+                    className={`p-4 rounded-lg border-2 transition-all ${
+                      qualityLevel === 'max' 
+                        ? 'border-red-500 bg-red-50' 
+                        : 'border-gray-200 hover:border-red-300'
+                    }`}
+                  >
+                    <div className="text-2xl mb-1">🔴</div>
+                    <div className="font-semibold text-sm">Максимум</div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Медленно, AI &lt; 30%
+                    </div>
+                  </button>
                 </div>
               </div>
 
@@ -440,6 +612,18 @@ export default function Documents() {
                     Готовый документ
                   </Label>
                   <div className="flex gap-2">
+                    {qualityScore && !qualityScore.passed && (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={improveQuality}
+                        disabled={isGeneratingDocument}
+                        className="gap-1"
+                      >
+                        <Icon name="Sparkles" size={16} />
+                        Улучшить
+                      </Button>
+                    )}
                     <Button
                       variant="outline"
                       size="sm"
