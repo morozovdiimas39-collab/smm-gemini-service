@@ -2,10 +2,10 @@ import json
 import os
 import urllib.request
 import urllib.error
-import urllib.parse
+import base64
 
 def handler(event: dict, context) -> dict:
-    '''API для генерации изображений через Pollinations.ai (бесплатный FLUX)'''
+    '''API для генерации изображений через Gemini 2.5 Flash с использованием прокси'''
     
     method = event.get('httpMethod', 'GET')
     
@@ -59,27 +59,84 @@ def handler(event: dict, context) -> dict:
         }
         
         aspect_ratio_map = {
-            'квадрат': {'width': 1024, 'height': 1024},
-            'горизонтальный': {'width': 1920, 'height': 1080},
-            'вертикальный': {'width': 1080, 'height': 1920},
-            'горизонтальный_широкий': {'width': 1200, 'height': 628}
+            'квадрат': '1:1',
+            'горизонтальный': '16:9',
+            'вертикальный': '9:16',
+            'горизонтальный_широкий': '3:2'
         }
         
         style_instruction = style_prompts.get(style, '')
-        size_config = aspect_ratio_map.get(aspect_ratio, {'width': 1024, 'height': 1024})
+        aspect_instruction = aspect_ratio_map.get(aspect_ratio, '1:1')
         
-        full_prompt = f"{task}. {style_instruction}. High quality, professional, detailed."
-        encoded_prompt = urllib.parse.quote(full_prompt)
+        prompt = f"{task}. Style: {style_instruction}. Aspect ratio: {aspect_instruction}. High quality, detailed."
         
-        image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width={size_config['width']}&height={size_config['height']}&nologo=true&model=flux"
+        gemini_api_key = os.environ.get('GEMINI_API_KEY')
+        proxy_url = os.environ.get('PROXY_URL')
         
+        if not gemini_api_key:
+            return {
+                'statusCode': 500,
+                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'body': json.dumps({'error': 'GEMINI_API_KEY не настроен'})
+            }
+        
+        gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={gemini_api_key}'
+        
+        gemini_request = {
+            'contents': [{
+                'parts': [{'text': prompt}]
+            }]
+        }
+        
+        req = urllib.request.Request(
+            gemini_url,
+            data=json.dumps(gemini_request).encode('utf-8'),
+            headers={'Content-Type': 'application/json'}
+        )
+        
+        if proxy_url:
+            proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
+            opener = urllib.request.build_opener(proxy_handler)
+            urllib.request.install_opener(opener)
+        
+        with urllib.request.urlopen(req, timeout=60) as response:
+            gemini_response = json.loads(response.read().decode('utf-8'))
+        
+        if 'candidates' in gemini_response and len(gemini_response['candidates']) > 0:
+            parts = gemini_response['candidates'][0]['content']['parts']
+            
+            for part in parts:
+                if 'inlineData' in part and 'data' in part['inlineData']:
+                    image_data = part['inlineData']['data']
+                    mime_type = part['inlineData'].get('mimeType', 'image/png')
+                    
+                    return {
+                        'statusCode': 200,
+                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                        'body': json.dumps({
+                            'imageUrl': f'data:{mime_type};base64,{image_data}',
+                            'prompt': prompt
+                        })
+                    }
+            
+            return {
+                'statusCode': 500,
+                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'body': json.dumps({'error': 'Нет изображения в ответе от Gemini'})
+            }
+        else:
+            return {
+                'statusCode': 500,
+                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'body': json.dumps({'error': 'Не удалось получить изображение от Gemini'})
+            }
+    
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode('utf-8') if e.fp else 'Unknown error'
         return {
-            'statusCode': 200,
+            'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({
-                'imageUrl': image_url,
-                'prompt': full_prompt
-            })
+            'body': json.dumps({'error': f'Gemini API error: {e.code}', 'details': error_body})
         }
     
     except Exception as e:

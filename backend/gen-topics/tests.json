@@ -1,0 +1,19 @@
+{
+  "tests": [
+    {
+      "name": "Generate topics",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "docType": "реферат",
+        "subject": "Искусственный интеллект",
+        "pages": 10
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "topics": "array"
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}

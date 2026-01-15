@@ -62,10 +62,6 @@ export default function ImageGenerator() {
     setGeneratedImageUrl('');
 
     try {
-      const selectedStyleData = styles.find(s => s.value === style);
-      const stylePrompt = selectedStyleData?.prompt || '';
-      const fullPrompt = `${task}. ${stylePrompt}`;
-
       const response = await fetch('https://functions.poehali.dev/845a219c-f5be-4bfa-b613-1242db9bc98f', {
         method: 'POST',
         headers: {

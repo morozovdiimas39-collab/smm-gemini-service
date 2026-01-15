@@ -1,0 +1,18 @@
+{
+  "tests": [
+    {
+      "name": "Test topics",
+      "method": "POST",
+      "path": "/",
+      "body": {
+        "subject": "AI",
+        "pages": 10
+      },
+      "expectedStatus": 200,
+      "expectedBody": {
+        "topics": "array"
+      },
+      "bodyMatcher": "partial"
+    }
+  ]
+}
