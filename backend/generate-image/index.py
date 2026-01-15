@@ -5,7 +5,7 @@ import urllib.error
 import base64
 
 def handler(event: dict, context) -> dict:
-    '''API для генерации изображений через Google Imagen 3 с использованием прокси'
+    '''API для генерации изображений через Gemini 2.0 Flash Experimental с использованием прокси'''
     
     method = event.get('httpMethod', 'GET')
     
@@ -59,16 +59,16 @@ def handler(event: dict, context) -> dict:
         }
         
         aspect_ratio_map = {
-            'квадрат': '1:1',
-            'горизонтальный': '16:9',
-            'вертикальный': '9:16',
-            'горизонтальный_широкий': '3:2'
+            'квадрат': '1080x1080',
+            'горизонтальный': '1920x1080',
+            'вертикальный': '1080x1920',
+            'горизонтальный_широкий': '1200x628'
         }
         
         style_instruction = style_prompts.get(style, '')
-        aspect_instruction = aspect_ratio_map.get(aspect_ratio, '1:1')
+        size_instruction = aspect_ratio_map.get(aspect_ratio, '1080x1080')
         
-        prompt = f"{task}. Style: {style_instruction}. Aspect ratio: {aspect_instruction}. High quality, detailed."
+        prompt = f"{task}. Style: {style_instruction}. Size: {size_instruction}. High quality, detailed, professional image."
         
         gemini_api_key = os.environ.get('GEMINI_API_KEY')
         proxy_url = os.environ.get('PROXY_URL')
@@ -80,15 +80,17 @@ def handler(event: dict, context) -> dict:
                 'body': json.dumps({'error': 'GEMINI_API_KEY не настроен'})
             }
         
-        gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-001:predict?key={gemini_api_key}'
+        gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={gemini_api_key}'
         
         gemini_request = {
-            'instances': [{
-                'prompt': prompt
+            'contents': [{
+                'parts': [{'text': f'Generate an image: {prompt}'}]
             }],
-            'parameters': {
-                'sampleCount': 1,
-                'aspectRatio': aspect_instruction
+            'generationConfig': {
+                'temperature': 1.0,
+                'topP': 0.95,
+                'topK': 40,
+                'maxOutputTokens': 8192
             }
         }
         
@@ -106,32 +108,33 @@ def handler(event: dict, context) -> dict:
         with urllib.request.urlopen(req, timeout=60) as response:
             gemini_response = json.loads(response.read().decode('utf-8'))
         
-        if 'predictions' in gemini_response and len(gemini_response['predictions']) > 0:
-            prediction = gemini_response['predictions'][0]
+        if 'candidates' in gemini_response and len(gemini_response['candidates']) > 0:
+            parts = gemini_response['candidates'][0]['content']['parts']
             
-            if 'bytesBase64Encoded' in prediction:
-                image_data = prediction['bytesBase64Encoded']
-                mime_type = prediction.get('mimeType', 'image/png')
-                
-                return {
-                    'statusCode': 200,
-                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                    'body': json.dumps({
-                        'imageUrl': f'data:{mime_type};base64,{image_data}',
-                        'prompt': prompt
-                    })
-                }
+            for part in parts:
+                if 'inlineData' in part and 'data' in part['inlineData']:
+                    image_data = part['inlineData']['data']
+                    mime_type = part['inlineData'].get('mimeType', 'image/png')
+                    
+                    return {
+                        'statusCode': 200,
+                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                        'body': json.dumps({
+                            'imageUrl': f'data:{mime_type};base64,{image_data}',
+                            'prompt': prompt
+                        })
+                    }
             
             return {
                 'statusCode': 500,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Нет изображения в ответе от Imagen'})
+                'body': json.dumps({'error': 'Нет изображения в ответе от Gemini'})
             }
         else:
             return {
                 'statusCode': 500,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Не удалось получить изображение от Imagen', 'response': gemini_response})
+                'body': json.dumps({'error': 'Не удалось получить изображение от Gemini', 'response': gemini_response})
             }
     
     except urllib.error.HTTPError as e:
