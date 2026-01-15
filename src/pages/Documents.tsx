@@ -112,36 +112,8 @@ export default function Documents() {
       let fullDocument = `${docType.toUpperCase()}\n\nТема: ${subject}\n\n`;
       
       fullDocument += 'ВВЕДЕНИЕ\n\n';
-      const introResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'section',
-          docType,
-          subject,
-          pages,
-          topics,
-          sectionTitle: 'Введение',
-          sectionDescription: `Введение к ${docType} на тему "${subject}"`,
-          additionalInfo,
-          qualityLevel
-        }),
-      });
-      const introData = await introResponse.json();
-      if (introData.text) {
-        fullDocument += introData.text + '\n\n';
-        setGeneratedDocument(fullDocument);
-      }
-      if (introData.quality) {
-        setQualityScore(introData.quality);
-      }
-      setGenerationProgress(Math.floor((1 / (topics.length + 2)) * 100));
-
-      for (let i = 0; i < topics.length; i++) {
-        const topic = topics[i];
-        fullDocument += `${i + 1}. ${topic.title.toUpperCase()}\n\n`;
-        
-        const sectionResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+      try {
+        const introResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -150,48 +122,103 @@ export default function Documents() {
             subject,
             pages,
             topics,
-            sectionTitle: topic.title,
-            sectionDescription: topic.description,
+            sectionTitle: 'Введение',
+            sectionDescription: `Введение к ${docType} на тему "${subject}"`,
             additionalInfo,
             qualityLevel
           }),
         });
-        
-        const sectionData = await sectionResponse.json();
-        if (sectionData.text) {
-          fullDocument += sectionData.text + '\n\n';
+        const introData = await introResponse.json();
+        if (introResponse.ok && introData.text) {
+          fullDocument += introData.text + '\n\n';
+          setGeneratedDocument(fullDocument);
+        } else {
+          fullDocument += `[Ошибка генерации введения]\n\n`;
           setGeneratedDocument(fullDocument);
         }
-        if (sectionData.quality) {
-          setQualityScore(sectionData.quality);
+        if (introData.quality) {
+          setQualityScore(introData.quality);
+        }
+      } catch (err) {
+        console.error('Ошибка генерации введения:', err);
+        fullDocument += `[Ошибка генерации введения]\n\n`;
+        setGeneratedDocument(fullDocument);
+      }
+      setGenerationProgress(Math.floor((1 / (topics.length + 2)) * 100));
+
+      for (let i = 0; i < topics.length; i++) {
+        const topic = topics[i];
+        fullDocument += `${i + 1}. ${topic.title.toUpperCase()}\n\n`;
+        
+        try {
+          const sectionResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              mode: 'section',
+              docType,
+              subject,
+              pages,
+              topics,
+              sectionTitle: topic.title,
+              sectionDescription: topic.description,
+              additionalInfo,
+              qualityLevel
+            }),
+          });
+          
+          const sectionData = await sectionResponse.json();
+          if (sectionResponse.ok && sectionData.text) {
+            fullDocument += sectionData.text + '\n\n';
+            setGeneratedDocument(fullDocument);
+          } else {
+            fullDocument += `[Ошибка генерации раздела]\n\n`;
+            setGeneratedDocument(fullDocument);
+          }
+          if (sectionData.quality) {
+            setQualityScore(sectionData.quality);
+          }
+        } catch (err) {
+          console.error(`Ошибка генерации раздела ${i + 1}:`, err);
+          fullDocument += `[Ошибка генерации раздела]\n\n`;
+          setGeneratedDocument(fullDocument);
         }
         
         setGenerationProgress(Math.floor(((i + 2) / (topics.length + 2)) * 100));
       }
 
       fullDocument += 'ЗАКЛЮЧЕНИЕ\n\n';
-      const conclusionResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode: 'section',
-          docType,
-          subject,
-          pages,
-          topics,
-          sectionTitle: 'Заключение',
-          sectionDescription: `Заключение к ${docType} на тему "${subject}"`,
-          additionalInfo,
-          qualityLevel
-        }),
-      });
-      const conclusionData = await conclusionResponse.json();
-      if (conclusionData.text) {
-        fullDocument += conclusionData.text + '\n\n';
+      try {
+        const conclusionResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: 'section',
+            docType,
+            subject,
+            pages,
+            topics,
+            sectionTitle: 'Заключение',
+            sectionDescription: `Заключение к ${docType} на тему "${subject}"`,
+            additionalInfo,
+            qualityLevel
+          }),
+        });
+        const conclusionData = await conclusionResponse.json();
+        if (conclusionResponse.ok && conclusionData.text) {
+          fullDocument += conclusionData.text + '\n\n';
+          setGeneratedDocument(fullDocument);
+        } else {
+          fullDocument += `[Ошибка генерации заключения]\n\n`;
+          setGeneratedDocument(fullDocument);
+        }
+        if (conclusionData.quality) {
+          setQualityScore(conclusionData.quality);
+        }
+      } catch (err) {
+        console.error('Ошибка генерации заключения:', err);
+        fullDocument += `[Ошибка генерации заключения]\n\n`;
         setGeneratedDocument(fullDocument);
-      }
-      if (conclusionData.quality) {
-        setQualityScore(conclusionData.quality);
       }
       
       setGenerationProgress(100);
