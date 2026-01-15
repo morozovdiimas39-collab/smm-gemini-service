@@ -251,9 +251,9 @@ def handler(event: dict, context) -> dict:
         
         # Настройки по уровню качества
         quality_settings = {
-            'standard': {'max_attempts': 1, 'ai_threshold': 85, 'uniqueness_threshold': 30, 'delay': 0},
-            'high': {'max_attempts': 3, 'ai_threshold': 70, 'uniqueness_threshold': 50, 'delay': 1},
-            'max': {'max_attempts': 5, 'ai_threshold': 60, 'uniqueness_threshold': 60, 'delay': 2}
+            'standard': {'max_attempts': 1, 'ai_threshold': 85, 'uniqueness_threshold': 30},
+            'high': {'max_attempts': 2, 'ai_threshold': 70, 'uniqueness_threshold': 50},
+            'max': {'max_attempts': 3, 'ai_threshold': 60, 'uniqueness_threshold': 60}
         }
         
         settings = quality_settings.get(quality_level, quality_settings['high'])
@@ -346,12 +346,7 @@ def handler(event: dict, context) -> dict:
             best_text = None
             best_scores = {'ai_score': 100, 'uniqueness_score': 0}
             
-            import time
-            
             for attempt in range(1, max_attempts + 1):
-                if attempt > 1 and settings['delay'] > 0:
-                    time.sleep(settings['delay'])
-                
                 prompt = improve_text_prompt(base_prompt, attempt, quality_level)
                 result_text = generate_with_gemini(prompt, api_key, proxy_url)
                 
