@@ -66,20 +66,22 @@ export default function ImageGenerator() {
       const stylePrompt = selectedStyleData?.prompt || '';
       const fullPrompt = `${task}. ${stylePrompt}`;
 
-      const response = await fetch('https://hook.eu2.make.com/generate-image', {
+      const response = await fetch('https://functions.poehali.dev/845a219c-f5be-4bfa-b613-1242db9bc98f', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          prompt: fullPrompt
+          task,
+          style,
+          aspectRatio
         }),
       });
 
       const data = await response.json();
       
-      if (response.ok && data.url) {
-        setGeneratedImageUrl(data.url);
+      if (response.ok && data.imageUrl) {
+        setGeneratedImageUrl(data.imageUrl);
         toast({
           title: 'Готово! 🎉',
           description: 'Изображение успешно создано',
