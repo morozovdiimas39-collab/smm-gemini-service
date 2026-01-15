@@ -269,6 +269,127 @@ export default function Documents() {
     });
   };
 
+  const retryFailedSections = async () => {
+    if (!generatedDocument) return;
+    
+    setIsGeneratingDocument(true);
+    setGenerationProgress(0);
+    
+    try {
+      toast({
+        title: 'Перегенерация ошибок...',
+        description: 'Повторная генерация только упавших разделов',
+      });
+      
+      let fullDocument = generatedDocument;
+      const errorPattern = /\[Ошибка генерации [^\]]+\]/g;
+      const errors = fullDocument.match(errorPattern) || [];
+      
+      if (errors.length === 0) {
+        toast({
+          title: 'Нет ошибок',
+          description: 'Все разделы сгенерированы успешно',
+        });
+        setIsGeneratingDocument(false);
+        return;
+      }
+      
+      const sections = fullDocument.split(/\n(?=\d+\. [А-ЯЁ]|ВВЕДЕНИЕ|ЗАКЛЮЧЕНИЕ)/);
+      let processedCount = 0;
+      
+      for (let i = 0; i < sections.length; i++) {
+        const section = sections[i];
+        
+        if (section.includes('[Ошибка генерации')) {
+          let sectionTitle = '';
+          let sectionDescription = '';
+          
+          if (section.includes('ВВЕДЕНИЕ')) {
+            sectionTitle = 'Введение';
+            sectionDescription = `Введение к ${docType} на тему "${subject}"`;
+          } else if (section.includes('ЗАКЛЮЧЕНИЕ')) {
+            sectionTitle = 'Заключение';
+            sectionDescription = `Заключение к ${docType} на тему "${subject}"`;
+          } else {
+            const titleMatch = section.match(/\d+\. ([А-ЯЁ][^\n]+)/);
+            if (titleMatch) {
+              const topicIndex = parseInt(section.match(/^(\d+)\./)?.[1] || '0') - 1;
+              if (topicIndex >= 0 && topicIndex < topics.length) {
+                sectionTitle = topics[topicIndex].title;
+                sectionDescription = topics[topicIndex].description;
+              }
+            }
+          }
+          
+          if (sectionTitle) {
+            let retryCount = 0;
+            const maxRetries = 3;
+            let success = false;
+            
+            while (retryCount < maxRetries && !success) {
+              try {
+                if (retryCount > 0) {
+                  await new Promise(resolve => setTimeout(resolve, 3000 * retryCount));
+                }
+                
+                const response = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    mode: 'section',
+                    docType,
+                    subject,
+                    pages,
+                    topics,
+                    sectionTitle,
+                    sectionDescription,
+                    additionalInfo,
+                    qualityLevel
+                  }),
+                });
+                
+                const data = await response.json();
+                if (response.ok && data.text) {
+                  sections[i] = section.replace(/\[Ошибка генерации [^\]]+\]/, data.text);
+                  fullDocument = sections.join('\n');
+                  setGeneratedDocument(fullDocument);
+                  success = true;
+                } else if (response.status === 429 || response.status === 500) {
+                  retryCount++;
+                } else {
+                  success = true;
+                }
+              } catch (err) {
+                console.error(`Ошибка перегенерации раздела:`, err);
+                retryCount++;
+              }
+            }
+            
+            processedCount++;
+            setGenerationProgress(Math.floor((processedCount / errors.length) * 100));
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+      }
+      
+      setGenerationProgress(100);
+      toast({
+        title: 'Готово! ✅',
+        description: `Перегенерировано разделов: ${processedCount}`,
+      });
+    } catch (error) {
+      toast({
+        title: 'Ошибка',
+        description: 'Не удалось перегенерировать разделы',
+        variant: 'destructive',
+      });
+      console.error(error);
+    } finally {
+      setIsGeneratingDocument(false);
+      setGenerationProgress(0);
+    }
+  };
+
   const improveQuality = async () => {
     if (!generatedDocument) return;
     
@@ -661,6 +782,18 @@ export default function Documents() {
                     Готовый документ
                   </Label>
                   <div className="flex gap-2">
+                    {generatedDocument.includes('[Ошибка генерации') && (
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={retryFailedSections}
+                        disabled={isGeneratingDocument}
+                        className="gap-1"
+                      >
+                        <Icon name="RefreshCw" size={16} />
+                        Исправить ошибки
+                      </Button>
+                    )}
                     {qualityScore && !qualityScore.passed && (
                       <Button
                         variant="default"
