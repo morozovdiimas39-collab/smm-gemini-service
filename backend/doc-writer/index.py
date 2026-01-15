@@ -251,9 +251,9 @@ def handler(event: dict, context) -> dict:
         
         # Настройки по уровню качества
         quality_settings = {
-            'standard': {'max_attempts': 3, 'ai_threshold': 70, 'uniqueness_threshold': 40},
-            'high': {'max_attempts': 4, 'ai_threshold': 50, 'uniqueness_threshold': 70},
-            'max': {'max_attempts': 5, 'ai_threshold': 40, 'uniqueness_threshold': 75}
+            'standard': {'max_attempts': 1, 'ai_threshold': 85, 'uniqueness_threshold': 30, 'delay': 0},
+            'high': {'max_attempts': 3, 'ai_threshold': 70, 'uniqueness_threshold': 50, 'delay': 1},
+            'max': {'max_attempts': 5, 'ai_threshold': 60, 'uniqueness_threshold': 60, 'delay': 2}
         }
         
         settings = quality_settings.get(quality_level, quality_settings['high'])
@@ -346,7 +346,12 @@ def handler(event: dict, context) -> dict:
             best_text = None
             best_scores = {'ai_score': 100, 'uniqueness_score': 0}
             
+            import time
+            
             for attempt in range(1, max_attempts + 1):
+                if attempt > 1 and settings['delay'] > 0:
+                    time.sleep(settings['delay'])
+                
                 prompt = improve_text_prompt(base_prompt, attempt, quality_level)
                 result_text = generate_with_gemini(prompt, api_key, proxy_url)
                 
@@ -360,12 +365,12 @@ def handler(event: dict, context) -> dict:
                     uniqueness_score = scores.get('uniqueness_score', 50)
                     
                     # Сохраняем лучший результат
-                    if ai_score < best_scores['ai_score'] or uniqueness_score > best_scores['uniqueness_score']:
+                    if best_text is None or (ai_score <= best_scores['ai_score'] and uniqueness_score >= best_scores['uniqueness_score']):
                         best_text = result_text
                         best_scores = {'ai_score': ai_score, 'uniqueness_score': uniqueness_score}
                     
                     # Проверяем по порогам уровня качества
-                    if ai_score < settings['ai_threshold'] and uniqueness_score > settings['uniqueness_threshold']:
+                    if ai_score <= settings['ai_threshold'] and uniqueness_score >= settings['uniqueness_threshold']:
                         return {
                             'statusCode': 200,
                             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
@@ -375,7 +380,8 @@ def handler(event: dict, context) -> dict:
                                     'ai_score': ai_score,
                                     'uniqueness_score': uniqueness_score,
                                     'attempts': attempt,
-                                    'passed': True
+                                    'passed': True,
+                                    'level': quality_level
                                 }
                             }, ensure_ascii=False),
                             'isBase64Encoded': False
@@ -394,7 +400,9 @@ def handler(event: dict, context) -> dict:
                         'ai_score': best_scores['ai_score'],
                         'uniqueness_score': best_scores['uniqueness_score'],
                         'attempts': max_attempts,
-                        'passed': False
+                        'passed': False,
+                        'level': quality_level,
+                        'message': f'Достигнуто после {max_attempts} попыток'
                     }
                 }, ensure_ascii=False),
                 'isBase64Encoded': False
