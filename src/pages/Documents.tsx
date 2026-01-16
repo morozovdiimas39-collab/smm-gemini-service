@@ -156,10 +156,6 @@ export default function Documents() {
         
         while (retryCount < maxRetries && !success) {
           try {
-            if (retryCount > 0) {
-              await new Promise(resolve => setTimeout(resolve, 3000 * retryCount));
-            }
-            
             const sectionResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
