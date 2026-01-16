@@ -132,16 +132,31 @@ export default function Documents() {
       const jobId = jobData.job_id;
       const totalSections = jobData.total_sections;
       
-      // Запускаем воркеры для обработки разделов
-      const workerPromises = [];
-      for (let i = 0; i < 3; i++) {
-        workerPromises.push(
-          fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ mode: 'process_section' }),
-          }).catch(() => {})
-        );
+      let activeWorkers = 0;
+      const MAX_WORKERS = 3;
+      
+      // Функция запуска воркера
+      const startWorker = () => {
+        if (activeWorkers >= MAX_WORKERS) return;
+        activeWorkers++;
+        
+        fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'process_section' }),
+        })
+          .then(() => {
+            activeWorkers--;
+            startWorker(); // Запускаем следующего
+          })
+          .catch(() => {
+            activeWorkers--;
+          });
+      };
+      
+      // Запускаем первых воркеров
+      for (let i = 0; i < MAX_WORKERS; i++) {
+        startWorker();
       }
       
       // Опрашиваем статус каждые 2 секунды
@@ -207,15 +222,6 @@ export default function Documents() {
               description: 'Документ успешно создан',
             });
             setIsGeneratingDocument(false);
-          } else {
-            // Запускаем ещё воркеры
-            for (let i = 0; i < 2; i++) {
-              fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ mode: 'process_section' }),
-              }).catch(() => {});
-            }
           }
         } catch (err) {
           console.error('Ошибка опроса статуса:', err);
