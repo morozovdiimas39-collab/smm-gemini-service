@@ -146,63 +146,84 @@ export default function Documents() {
       }
       setGenerationProgress(Math.floor((1 / (topics.length + 2)) * 100));
 
-      for (let i = 0; i < topics.length; i++) {
-        const topic = topics[i];
-        fullDocument += `${i + 1}. ${topic.title.toUpperCase()}\n\n`;
-        
-        let retryCount = 0;
-        const maxRetries = 3;
-        let success = false;
-        
-        while (retryCount < maxRetries && !success) {
-          try {
-            const sectionResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                mode: 'section',
-                docType,
-                subject,
-                pages,
-                topics,
-                sectionTitle: topic.title,
-                sectionDescription: topic.description,
-                additionalInfo,
-                qualityLevel
-              }),
-            });
-            
-            const sectionData = await sectionResponse.json();
-            if (sectionResponse.ok && sectionData.text) {
-              fullDocument += sectionData.text + '\n\n';
-              setGeneratedDocument(fullDocument);
-              success = true;
-            } else if (sectionResponse.status === 429 || sectionResponse.status === 500) {
+      const batchSize = 3;
+      const sectionResults: string[] = new Array(topics.length).fill('');
+      
+      for (let i = 0; i < topics.length; i += batchSize) {
+        const batch = topics.slice(i, i + batchSize);
+        const batchPromises = batch.map(async (topic, batchIndex) => {
+          const actualIndex = i + batchIndex;
+          
+          let retryCount = 0;
+          const maxRetries = 3;
+          let success = false;
+          let resultText = '';
+          
+          while (retryCount < maxRetries && !success) {
+            try {
+              const sectionResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  mode: 'section',
+                  docType,
+                  subject,
+                  pages,
+                  topics,
+                  sectionTitle: topic.title,
+                  sectionDescription: topic.description,
+                  additionalInfo,
+                  qualityLevel
+                }),
+              });
+              
+              const sectionData = await sectionResponse.json();
+              if (sectionResponse.ok && sectionData.text) {
+                resultText = sectionData.text;
+                success = true;
+                if (sectionData.quality) {
+                  setQualityScore(sectionData.quality);
+                }
+              } else if (sectionResponse.status === 429 || sectionResponse.status === 500) {
+                retryCount++;
+                if (retryCount >= maxRetries) {
+                  resultText = `[Ошибка генерации раздела - превышен лимит запросов]`;
+                }
+              } else {
+                resultText = `[Ошибка генерации раздела]`;
+                success = true;
+              }
+            } catch (err) {
+              console.error(`Ошибка генерации раздела ${actualIndex + 1}:`, err);
               retryCount++;
               if (retryCount >= maxRetries) {
-                fullDocument += `[Ошибка генерации раздела - превышен лимит запросов]\n\n`;
-                setGeneratedDocument(fullDocument);
+                resultText = `[Ошибка генерации раздела]`;
               }
-            } else {
-              fullDocument += `[Ошибка генерации раздела]\n\n`;
-              setGeneratedDocument(fullDocument);
-              success = true;
-            }
-            if (sectionData.quality) {
-              setQualityScore(sectionData.quality);
-            }
-          } catch (err) {
-            console.error(`Ошибка генерации раздела ${i + 1}:`, err);
-            retryCount++;
-            if (retryCount >= maxRetries) {
-              fullDocument += `[Ошибка генерации раздела]\n\n`;
-              setGeneratedDocument(fullDocument);
             }
           }
+          
+          return { index: actualIndex, text: resultText };
+        });
+        
+        const batchResults = await Promise.all(batchPromises);
+        batchResults.forEach(({ index, text }) => {
+          sectionResults[index] = text;
+        });
+        
+        fullDocument = `${docType.toUpperCase()}\n\nТема: ${subject}\n\nВВЕДЕНИЕ\n\n`;
+        if (fullDocument.includes('ВВЕДЕНИЕ\n\n') && !fullDocument.includes('[Ошибка генерации введения]')) {
+          const introMatch = fullDocument.match(/ВВЕДЕНИЕ\n\n([\s\S]*?)(?=\n\n\d+\.|$)/);
+          if (introMatch) fullDocument = fullDocument.substring(0, introMatch.index! + introMatch[0].length);
         }
         
-        setGenerationProgress(Math.floor(((i + 2) / (topics.length + 2)) * 100));
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        for (let j = 0; j <= i + batch.length - 1 && j < topics.length; j++) {
+          fullDocument += `${j + 1}. ${topics[j].title.toUpperCase()}\n\n${sectionResults[j]}\n\n`;
+        }
+        
+        setGeneratedDocument(fullDocument);
+        setGenerationProgress(Math.floor(((i + batch.length + 1) / (topics.length + 2)) * 100));
+        
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
       fullDocument += 'ЗАКЛЮЧЕНИЕ\n\n';
