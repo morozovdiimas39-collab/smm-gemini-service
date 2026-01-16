@@ -225,22 +225,6 @@ def handler(event: dict, context) -> dict:
         section_description = body.get('sectionDescription', '')
         quality_level = body.get('qualityLevel', 'high')
         
-        if not subject:
-            return {
-                'statusCode': 400,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Не указана тема документа'}),
-                'isBase64Encoded': False
-            }
-        
-        if mode == 'section' and not section_title:
-            return {
-                'statusCode': 400,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Не указан раздел'}),
-                'isBase64Encoded': False
-            }
-        
         api_key = os.environ.get('GEMINI_API_KEY')
         proxy_url = os.environ.get('PROXY_URL')
         
