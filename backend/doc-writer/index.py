@@ -348,11 +348,22 @@ def handler(event: dict, context) -> dict:
         
         if mode == 'process_section':
             dsn = os.environ.get('DATABASE_URL')
+            api_key = os.environ.get('GEMINI_API_KEY')
+            proxy_url = os.environ.get('PROXY_URL')
+            
             if not dsn:
                 return {
                     'statusCode': 500,
                     'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
                     'body': json.dumps({'error': 'DATABASE_URL не настроен'}),
+                    'isBase64Encoded': False
+                }
+            
+            if not api_key:
+                return {
+                    'statusCode': 500,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'error': 'GEMINI_API_KEY не настроен'}),
                     'isBase64Encoded': False
                 }
             
@@ -383,6 +394,14 @@ def handler(event: dict, context) -> dict:
             # Обновляем статус на processing
             cur.execute("UPDATE document_sections SET status = 'processing', updated_at = NOW() WHERE id = %s", (section['id'],))
             conn.commit()
+            
+            # Настройки качества
+            quality_settings = {
+                'standard': {'max_attempts': 1, 'ai_threshold': 85, 'uniqueness_threshold': 30},
+                'high': {'max_attempts': 2, 'ai_threshold': 70, 'uniqueness_threshold': 50},
+                'max': {'max_attempts': 3, 'ai_threshold': 60, 'uniqueness_threshold': 60}
+            }
+            settings = quality_settings.get(section['quality_level'], quality_settings['high'])
             
             # Генерируем текст
             words_per_page = 300
