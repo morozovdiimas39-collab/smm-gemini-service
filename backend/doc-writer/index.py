@@ -258,6 +258,38 @@ def handler(event: dict, context) -> dict:
         
         settings = quality_settings.get(quality_level, quality_settings['high'])
         
+        if mode == 'check_quality':
+            text = body.get('text', '')
+            if not text:
+                return {
+                    'statusCode': 400,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'error': 'Текст не указан'}),
+                    'isBase64Encoded': False
+                }
+            
+            try:
+                scores = check_content_quality(text, api_key, proxy_url)
+                ai_score = scores.get('ai_score', 50)
+                uniqueness_score = scores.get('uniqueness_score', 50)
+                
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({
+                        'ai_score': ai_score,
+                        'uniqueness_score': uniqueness_score
+                    }, ensure_ascii=False),
+                    'isBase64Encoded': False
+                }
+            except Exception as e:
+                return {
+                    'statusCode': 500,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'error': f'Ошибка проверки качества: {str(e)}'}),
+                    'isBase64Encoded': False
+                }
+        
         if mode == 'topics':
             sections_count = max(3, pages // 3)
             prompt = f"""Создай структуру для документа типа "{doc_type}" на тему: {subject}
@@ -341,64 +373,18 @@ def handler(event: dict, context) -> dict:
 - {target_words} слов - строго!
 - Напиши ТОЛЬКО текст раздела без заголовка"""
 
-            # Генерация с автопроверкой
-            max_attempts = settings['max_attempts']
-            best_text = None
-            best_scores = {'ai_score': 100, 'uniqueness_score': 0}
+            # Генерация БЕЗ проверки качества (быстро)
+            attempt_num = body.get('attemptNum', 1)
+            prompt = improve_text_prompt(base_prompt, attempt_num, quality_level)
+            result_text = generate_with_gemini(prompt, api_key, proxy_url)
+            result_text = humanize_text(result_text)
             
-            for attempt in range(1, max_attempts + 1):
-                prompt = improve_text_prompt(base_prompt, attempt, quality_level)
-                result_text = generate_with_gemini(prompt, api_key, proxy_url)
-                
-                # Пост-процессинг: убираем AI-фразы
-                result_text = humanize_text(result_text)
-                
-                # Проверяем качество
-                try:
-                    scores = check_content_quality(result_text, api_key, proxy_url)
-                    ai_score = scores.get('ai_score', 50)
-                    uniqueness_score = scores.get('uniqueness_score', 50)
-                    
-                    # Сохраняем лучший результат
-                    if best_text is None or (ai_score <= best_scores['ai_score'] and uniqueness_score >= best_scores['uniqueness_score']):
-                        best_text = result_text
-                        best_scores = {'ai_score': ai_score, 'uniqueness_score': uniqueness_score}
-                    
-                    # Проверяем по порогам уровня качества
-                    if ai_score <= settings['ai_threshold'] and uniqueness_score >= settings['uniqueness_threshold']:
-                        return {
-                            'statusCode': 200,
-                            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                            'body': json.dumps({
-                                'text': result_text,
-                                'quality': {
-                                    'ai_score': ai_score,
-                                    'uniqueness_score': uniqueness_score,
-                                    'attempts': attempt,
-                                    'passed': True,
-                                    'level': quality_level
-                                }
-                            }, ensure_ascii=False),
-                            'isBase64Encoded': False
-                        }
-                except Exception:
-                    if best_text is None:
-                        best_text = result_text
-            
-            # Возвращаем лучший результат
             return {
                 'statusCode': 200,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
                 'body': json.dumps({
-                    'text': best_text,
-                    'quality': {
-                        'ai_score': best_scores['ai_score'],
-                        'uniqueness_score': best_scores['uniqueness_score'],
-                        'attempts': max_attempts,
-                        'passed': False,
-                        'level': quality_level,
-                        'message': f'Достигнуто после {max_attempts} попыток'
-                    }
+                    'text': result_text,
+                    'attemptNum': attempt_num
                 }, ensure_ascii=False),
                 'isBase64Encoded': False
             }
