@@ -543,9 +543,16 @@ def handler(event: dict, context) -> dict:
             'isBase64Encoded': False
         }
     except Exception as e:
+        import traceback
+        error_details = {
+            'error': str(e),
+            'type': type(e).__name__,
+            'traceback': traceback.format_exc()
+        }
+        print(f"ERROR: {error_details}")
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)}),
+            'body': json.dumps({'error': str(e), 'details': error_details}, ensure_ascii=False),
             'isBase64Encoded': False
         }
