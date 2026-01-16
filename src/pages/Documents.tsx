@@ -110,6 +110,7 @@ export default function Documents() {
 
     try {
       let fullDocument = `${docType.toUpperCase()}\n\nТема: ${subject}\n\n`;
+      let introText = '';
       
       fullDocument += 'ВВЕДЕНИЕ\n\n';
       try {
@@ -130,10 +131,12 @@ export default function Documents() {
         });
         const introData = await introResponse.json();
         if (introResponse.ok && introData.text) {
-          fullDocument += introData.text + '\n\n';
+          introText = introData.text;
+          fullDocument += introText + '\n\n';
           setGeneratedDocument(fullDocument);
         } else {
-          fullDocument += `[Ошибка генерации введения]\n\n`;
+          introText = `[Ошибка генерации введения]`;
+          fullDocument += introText + '\n\n';
           setGeneratedDocument(fullDocument);
         }
         if (introData.quality) {
@@ -141,7 +144,8 @@ export default function Documents() {
         }
       } catch (err) {
         console.error('Ошибка генерации введения:', err);
-        fullDocument += `[Ошибка генерации введения]\n\n`;
+        introText = `[Ошибка генерации введения]`;
+        fullDocument += introText + '\n\n';
         setGeneratedDocument(fullDocument);
       }
       setGenerationProgress(Math.floor((1 / (topics.length + 2)) * 100));
@@ -210,11 +214,7 @@ export default function Documents() {
           sectionResults[index] = text;
         });
         
-        fullDocument = `${docType.toUpperCase()}\n\nТема: ${subject}\n\nВВЕДЕНИЕ\n\n`;
-        if (fullDocument.includes('ВВЕДЕНИЕ\n\n') && !fullDocument.includes('[Ошибка генерации введения]')) {
-          const introMatch = fullDocument.match(/ВВЕДЕНИЕ\n\n([\s\S]*?)(?=\n\n\d+\.|$)/);
-          if (introMatch) fullDocument = fullDocument.substring(0, introMatch.index! + introMatch[0].length);
-        }
+        fullDocument = `${docType.toUpperCase()}\n\nТема: ${subject}\n\nВВЕДЕНИЕ\n\n${introText}\n\n`;
         
         for (let j = 0; j <= i + batch.length - 1 && j < topics.length; j++) {
           fullDocument += `${j + 1}. ${topics[j].title.toUpperCase()}\n\n${sectionResults[j]}\n\n`;
