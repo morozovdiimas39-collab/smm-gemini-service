@@ -3,6 +3,9 @@ import os
 import urllib.request
 import urllib.error
 import re
+import psycopg2
+import psycopg2.extras
+import uuid
 
 def humanize_text(text: str) -> str:
     '''Пост-процессинг: заменяет AI-фразы на человечные'''
@@ -257,6 +260,225 @@ def handler(event: dict, context) -> dict:
         }
         
         settings = quality_settings.get(quality_level, quality_settings['high'])
+        
+        if mode == 'create_job':
+            dsn = os.environ.get('DATABASE_URL')
+            if not dsn:
+                return {
+                    'statusCode': 500,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'error': 'DATABASE_URL не настроен'}),
+                    'isBase64Encoded': False
+                }
+            
+            conn = psycopg2.connect(dsn)
+            conn.autocommit = False
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            
+            # Создаём задачу
+            cur.execute("""
+                INSERT INTO document_jobs (doc_type, subject, pages, topics, additional_info, quality_level, status)
+                VALUES (%s, %s, %s, %s, %s, %s, 'processing')
+                RETURNING id
+            """, (doc_type, subject, pages, json.dumps(topics), additional_info, quality_level))
+            job = cur.fetchone()
+            job_id = job['id']
+            
+            # Создаём разделы: введение, основные разделы, заключение
+            sections_to_create = []
+            sections_to_create.append((job_id, 0, 'Введение', f'Введение к {doc_type} на тему "{subject}"'))
+            
+            for i, topic in enumerate(topics):
+                sections_to_create.append((job_id, i + 1, topic['title'], topic['description']))
+            
+            sections_to_create.append((job_id, len(topics) + 1, 'Заключение', f'Заключение к {doc_type} на тему "{subject}"'))
+            
+            cur.executemany("""
+                INSERT INTO document_sections (job_id, section_index, section_title, section_description, status)
+                VALUES (%s, %s, %s, %s, 'pending')
+            """, sections_to_create)
+            
+            conn.commit()
+            conn.close()
+            
+            return {
+                'statusCode': 200,
+                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'body': json.dumps({'job_id': str(job_id), 'total_sections': len(sections_to_create)}, ensure_ascii=False),
+                'isBase64Encoded': False
+            }
+        
+        if mode == 'get_status':
+            job_id = body.get('job_id')
+            if not job_id:
+                return {
+                    'statusCode': 400,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'error': 'job_id не указан'}),
+                    'isBase64Encoded': False
+                }
+            
+            dsn = os.environ.get('DATABASE_URL')
+            conn = psycopg2.connect(dsn)
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            
+            cur.execute("""
+                SELECT id, section_index, section_title, content, ai_score, uniqueness_score, status
+                FROM document_sections
+                WHERE job_id = %s
+                ORDER BY section_index
+            """, (job_id,))
+            sections = cur.fetchall()
+            
+            cur.execute("SELECT status FROM document_jobs WHERE id = %s", (job_id,))
+            job = cur.fetchone()
+            
+            conn.close()
+            
+            completed = sum(1 for s in sections if s['status'] == 'completed')
+            total = len(sections)
+            
+            job_status = 'processing'
+            if completed == total:
+                job_status = 'completed'
+            
+            return {
+                'statusCode': 200,
+                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'body': json.dumps({
+                    'job_status': job_status,
+                    'completed': completed,
+                    'total': total,
+                    'sections': [{
+                        'id': str(s['id']),
+                        'index': s['section_index'],
+                        'title': s['section_title'],
+                        'content': s['content'],
+                        'ai_score': s['ai_score'],
+                        'uniqueness_score': s['uniqueness_score'],
+                        'status': s['status']
+                    } for s in sections]
+                }, ensure_ascii=False),
+                'isBase64Encoded': False
+            }
+        
+        if mode == 'process_section':
+            dsn = os.environ.get('DATABASE_URL')
+            if not dsn:
+                return {
+                    'statusCode': 500,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'error': 'DATABASE_URL не настроен'}),
+                    'isBase64Encoded': False
+                }
+            
+            conn = psycopg2.connect(dsn)
+            conn.autocommit = False
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            
+            # Берём 1 секцию со статусом pending
+            cur.execute("""
+                SELECT s.*, j.doc_type, j.subject, j.pages, j.topics, j.additional_info, j.quality_level
+                FROM document_sections s
+                JOIN document_jobs j ON s.job_id = j.id
+                WHERE s.status = 'pending'
+                ORDER BY s.created_at
+                LIMIT 1
+            """)
+            section = cur.fetchone()
+            
+            if not section:
+                conn.close()
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'message': 'Нет задач'}),
+                    'isBase64Encoded': False
+                }
+            
+            # Обновляем статус на processing
+            cur.execute("UPDATE document_sections SET status = 'processing', updated_at = NOW() WHERE id = %s", (section['id'],))
+            conn.commit()
+            
+            # Генерируем текст
+            words_per_page = 300
+            total_words_needed = section['pages'] * words_per_page
+            topics_list = json.loads(section['topics']) if isinstance(section['topics'], str) else section['topics']
+            sections_count = len(topics_list) if topics_list else 5
+            words_for_intro_conclusion = 400
+            words_for_sections = total_words_needed - words_for_intro_conclusion
+            words_per_section = words_for_sections // sections_count if sections_count > 0 else 500
+            
+            target_words = words_per_section
+            if 'введение' in section['section_title'].lower() or 'заключение' in section['section_title'].lower():
+                target_words = 200
+            
+            base_prompt = f"""Ты студент, который пишет {section['doc_type']} на тему: {section['subject']}
+
+РАЗДЕЛ: {section['section_title']}
+О ЧЕМ ПИСАТЬ: {section['section_description']}
+
+ТРЕБОВАНИЯ К ОБЪЕМУ:
+- Ровно {target_words} слов (не меньше!)
+
+КАК ПИСАТЬ (КРИТИЧНО ВАЖНО):
+1. Пиши ПРОСТЫМ языком, как объясняешь другу
+2. КОРОТКИЕ и ДЛИННЫЕ предложения вперемешку
+3. Используй АКТИВНЫЙ залог
+4. Приводи КОНКРЕТНЫЕ примеры, цифры, факты
+5. НЕ используй штампы: "в современном мире", "важно отметить", "следует подчеркнуть"
+6. Начни с КОНКРЕТНОГО факта или примера
+7. Добавь ЛИЧНЫЕ наблюдения: "на практике видно...", "интересно, что..."
+8. Используй риторические вопросы иногда
+9. Пиши так, чтобы было интересно читать
+
+{f"ДОПОЛНИТЕЛЬНО: {section['additional_info']}" if section['additional_info'] else ''}
+
+ВАЖНО: 
+- Текст должен звучать как написал человек, а не робот
+- {target_words} слов - строго!
+- Напиши ТОЛЬКО текст раздела без заголовка"""
+
+            best_text = None
+            best_scores = {'ai_score': 100, 'uniqueness_score': 0}
+            
+            for attempt in range(1, settings['max_attempts'] + 1):
+                prompt = improve_text_prompt(base_prompt, attempt, section['quality_level'])
+                result_text = generate_with_gemini(prompt, api_key, proxy_url)
+                result_text = humanize_text(result_text)
+                
+                try:
+                    scores = check_content_quality(result_text, api_key, proxy_url)
+                    ai_score = scores.get('ai_score', 50)
+                    uniqueness_score = scores.get('uniqueness_score', 50)
+                    
+                    if best_text is None or (ai_score <= best_scores['ai_score'] and uniqueness_score >= best_scores['uniqueness_score']):
+                        best_text = result_text
+                        best_scores = {'ai_score': ai_score, 'uniqueness_score': uniqueness_score}
+                    
+                    if ai_score <= settings['ai_threshold'] and uniqueness_score >= settings['uniqueness_threshold']:
+                        break
+                except Exception:
+                    if best_text is None:
+                        best_text = result_text
+            
+            # Сохраняем результат
+            cur.execute("""
+                UPDATE document_sections 
+                SET content = %s, ai_score = %s, uniqueness_score = %s, 
+                    attempt_num = %s, status = 'completed', updated_at = NOW()
+                WHERE id = %s
+            """, (best_text, best_scores['ai_score'], best_scores['uniqueness_score'], settings['max_attempts'], section['id']))
+            
+            conn.commit()
+            conn.close()
+            
+            return {
+                'statusCode': 200,
+                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'body': json.dumps({'message': 'Раздел сгенерирован', 'section_id': str(section['id'])}),
+                'isBase64Encoded': False
+            }
         
         if mode == 'check_quality':
             text = body.get('text', '')

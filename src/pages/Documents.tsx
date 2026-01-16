@@ -109,6 +109,160 @@ export default function Documents() {
     setGenerationProgress(0);
 
     try {
+      // Создаём задачу
+      const createJobResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'create_job',
+          docType,
+          subject,
+          pages,
+          topics,
+          additionalInfo,
+          qualityLevel
+        }),
+      });
+      
+      const jobData = await createJobResponse.json();
+      if (!createJobResponse.ok || !jobData.job_id) {
+        throw new Error('Не удалось создать задачу');
+      }
+      
+      const jobId = jobData.job_id;
+      const totalSections = jobData.total_sections;
+      
+      // Запускаем воркеры для обработки разделов
+      const workerPromises = [];
+      for (let i = 0; i < 3; i++) {
+        workerPromises.push(
+          fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode: 'process_section' }),
+          }).catch(() => {})
+        );
+      }
+      
+      // Опрашиваем статус каждые 2 секунды
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              mode: 'get_status',
+              job_id: jobId
+            }),
+          });
+          
+          const statusData = await statusResponse.json();
+          if (!statusResponse.ok) {
+            clearInterval(pollInterval);
+            throw new Error('Не удалось получить статус');
+          }
+          
+          const { sections, completed, total, job_status } = statusData;
+          
+          // Обновляем прогресс
+          setGenerationProgress(Math.floor((completed / total) * 100));
+          
+          // Собираем документ
+          let fullDocument = `${docType.toUpperCase()}\n\nТема: ${subject}\n\n`;
+          
+          for (const section of sections.sort((a, b) => a.index - b.index)) {
+            if (section.index === 0) {
+              fullDocument += 'ВВЕДЕНИЕ\n\n';
+            } else if (section.index === total - 1) {
+              fullDocument += 'ЗАКЛЮЧЕНИЕ\n\n';
+            } else {
+              fullDocument += `${section.index}. ${section.title.toUpperCase()}\n\n`;
+            }
+            
+            if (section.content) {
+              fullDocument += section.content + '\n\n';
+              if (section.ai_score !== null) {
+                setQualityScore({
+                  ai_score: section.ai_score,
+                  uniqueness_score: section.uniqueness_score || 0,
+                  attempts: section.attempt_num || 1,
+                  passed: section.ai_score <= 70 && (section.uniqueness_score || 0) >= 50
+                });
+              }
+            } else if (section.status === 'processing') {
+              fullDocument += '[Генерируется...]\n\n';
+            } else if (section.status === 'pending') {
+              fullDocument += '[Ожидает генерации...]\n\n';
+            }
+          }
+          
+          setGeneratedDocument(fullDocument);
+          
+          // Если всё готово - останавливаем опрос
+          if (job_status === 'completed') {
+            clearInterval(pollInterval);
+            setGenerationProgress(100);
+            toast({
+              title: 'Готово! 🎉',
+              description: 'Документ успешно создан',
+            });
+            setIsGeneratingDocument(false);
+          } else {
+            // Запускаем ещё воркеры
+            for (let i = 0; i < 2; i++) {
+              fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: 'process_section' }),
+              }).catch(() => {});
+            }
+          }
+        } catch (err) {
+          console.error('Ошибка опроса статуса:', err);
+        }
+      }, 2000);
+      
+      // Останавливаем через 10 минут принудительно
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        if (isGeneratingDocument) {
+          setIsGeneratingDocument(false);
+          toast({
+            title: 'Таймаут',
+            description: 'Генерация заняла слишком много времени',
+            variant: 'destructive',
+          });
+        }
+      }, 600000);
+      
+    } catch (error) {
+      toast({
+        title: 'Ошибка генерации',
+        description: 'Не удалось создать документ. Попробуйте еще раз.',
+        variant: 'destructive',
+      });
+      console.error(error);
+      setIsGeneratingDocument(false);
+      setGenerationProgress(0);
+    }
+  };
+
+  // Старая функция (удалить после тестов)
+  const generateDocumentOld = async () => {
+    if (topics.length === 0) {
+      toast({
+        title: 'Ошибка',
+        description: 'Сначала сгенерируйте темы',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsGeneratingDocument(true);
+    setGeneratedDocument('');
+    setGenerationProgress(0);
+
+    try {
       let fullDocument = `${docType.toUpperCase()}\n\nТема: ${subject}\n\n`;
       let introText = '';
       
