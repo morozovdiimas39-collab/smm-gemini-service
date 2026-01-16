@@ -1,45 +1,37 @@
 {
   "tests": [
     {
-      "name": "Generate full document",
+      "name": "Generate topics",
       "method": "POST",
       "path": "/",
       "body": {
+        "mode": "topics",
         "docType": "реферат",
         "subject": "Искусственный интеллект",
-        "pages": 10,
-        "topics": [
-          {
-            "title": "Введение в AI",
-            "description": "Основные концепции искусственного интеллекта"
-          },
-          {
-            "title": "Применение AI",
-            "description": "Современные области применения"
-          }
-        ],
-        "additionalInfo": ""
+        "pages": 10
       },
       "expectedStatus": 200,
       "expectedBody": {
-        "document": "string"
+        "topics": "array"
       },
       "bodyMatcher": "partial"
     },
     {
-      "name": "Generate section",
+      "name": "Create document job",
       "method": "POST",
       "path": "/",
       "body": {
-        "mode": "section",
+        "mode": "create_job",
         "docType": "реферат",
-        "subject": "AI",
-        "sectionTitle": "Введение",
-        "sectionDescription": "Введение в тему"
+        "subject": "Тест",
+        "pages": 5,
+        "topics": [{"title": "Раздел 1", "description": "Описание"}],
+        "qualityLevel": "standard"
       },
       "expectedStatus": 200,
       "expectedBody": {
-        "text": "string"
+        "job_id": "string",
+        "total_sections": "number"
       },
       "bodyMatcher": "partial"
     }
