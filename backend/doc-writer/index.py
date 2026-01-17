@@ -156,8 +156,7 @@ def improve_text_prompt(original_prompt: str, iteration: int, quality_level: str
     return f"{original_prompt}\n\n{'='*50}\n{strategy_text}\n{'='*50}\n\nТеперь напиши текст полностью по-новому с этим подходом!"
 
 def generate_with_gemini(prompt: str, api_key: str, proxy_url: str = None) -> str:
-    '''Генерирует текст через Gemini API с retry при rate limit'''
-    import time
+    '''Генерирует текст через Gemini API БЕЗ retry (retry на фронтенде)'''
     gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}'
     
     gemini_request = {
@@ -177,27 +176,18 @@ def generate_with_gemini(prompt: str, api_key: str, proxy_url: str = None) -> st
         opener = urllib.request.build_opener(proxy_handler)
         urllib.request.install_opener(opener)
     
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            with urllib.request.urlopen(req, timeout=20) as response:
-                gemini_response = json.loads(response.read().decode('utf-8'))
-                if 'candidates' in gemini_response and gemini_response['candidates']:
-                    return gemini_response['candidates'][0]['content']['parts'][0]['text'].strip()
-                raise Exception('Не удалось сгенерировать текст')
-        except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 5
-                time.sleep(wait_time)
-                continue
-            raise Exception('Слишком много запросов к API. Подождите немного и попробуйте снова')
-        except Exception as e:
-            if attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            raise Exception(f'Ошибка генерации: {str(e)}')
-    
-    raise Exception('Не удалось сгенерировать текст')
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            gemini_response = json.loads(response.read().decode('utf-8'))
+            if 'candidates' in gemini_response and gemini_response['candidates']:
+                return gemini_response['candidates'][0]['content']['parts'][0]['text'].strip()
+            raise Exception('Не удалось сгенерировать текст')
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            raise Exception('Rate limit. Retry on frontend')
+        raise Exception(f'HTTP Error {e.code}')
+    except Exception as e:
+        raise Exception(f'Ошибка генерации: {str(e)}')
 
 def handler(event: dict, context) -> dict:
     '''Генерирует структуру или полный документ с автопроверкой качества через Gemini API'''
@@ -458,43 +448,50 @@ def handler(event: dict, context) -> dict:
             best_text = None
             best_scores = {'ai_score': 100, 'uniqueness_score': 0}
             
-            for attempt in range(1, settings['max_attempts'] + 1):
-                prompt = improve_text_prompt(base_prompt, attempt, section['quality_level'])
-                result_text = generate_with_gemini(prompt, api_key, proxy_url)
-                result_text = humanize_text(result_text)
+            try:
+                for attempt in range(1, settings['max_attempts'] + 1):
+                    prompt = improve_text_prompt(base_prompt, attempt, section['quality_level'])
+                    result_text = generate_with_gemini(prompt, api_key, proxy_url)
+                    result_text = humanize_text(result_text)
+                    
+                    try:
+                        scores = check_content_quality(result_text, api_key, proxy_url)
+                        ai_score = scores.get('ai_score', 50)
+                        uniqueness_score = scores.get('uniqueness_score', 50)
+                        
+                        if best_text is None or (ai_score <= best_scores['ai_score'] and uniqueness_score >= best_scores['uniqueness_score']):
+                            best_text = result_text
+                            best_scores = {'ai_score': ai_score, 'uniqueness_score': uniqueness_score}
+                        
+                        if ai_score <= settings['ai_threshold'] and uniqueness_score >= settings['uniqueness_threshold']:
+                            break
+                    except Exception:
+                        if best_text is None:
+                            best_text = result_text
                 
-                try:
-                    scores = check_content_quality(result_text, api_key, proxy_url)
-                    ai_score = scores.get('ai_score', 50)
-                    uniqueness_score = scores.get('uniqueness_score', 50)
-                    
-                    if best_text is None or (ai_score <= best_scores['ai_score'] and uniqueness_score >= best_scores['uniqueness_score']):
-                        best_text = result_text
-                        best_scores = {'ai_score': ai_score, 'uniqueness_score': uniqueness_score}
-                    
-                    if ai_score <= settings['ai_threshold'] and uniqueness_score >= settings['uniqueness_threshold']:
-                        break
-                except Exception:
-                    if best_text is None:
-                        best_text = result_text
-            
-            # Сохраняем результат
-            cur.execute("""
-                UPDATE document_sections 
-                SET content = %s, ai_score = %s, uniqueness_score = %s, 
-                    attempt_num = %s, status = 'completed', updated_at = NOW()
-                WHERE id = %s
-            """, (best_text, best_scores['ai_score'], best_scores['uniqueness_score'], settings['max_attempts'], section['id']))
-            
-            conn.commit()
-            conn.close()
-            
-            return {
-                'statusCode': 200,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'message': 'Раздел сгенерирован', 'section_id': str(section['id'])}),
-                'isBase64Encoded': False
-            }
+                # Сохраняем результат
+                cur.execute("""
+                    UPDATE document_sections 
+                    SET content = %s, ai_score = %s, uniqueness_score = %s, 
+                        attempt_num = %s, status = 'completed', updated_at = NOW()
+                    WHERE id = %s
+                """, (best_text, best_scores['ai_score'], best_scores['uniqueness_score'], settings['max_attempts'], section['id']))
+                
+                conn.commit()
+                conn.close()
+                
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'message': 'Раздел сгенерирован', 'section_id': str(section['id'])}),
+                    'isBase64Encoded': False
+                }
+            except Exception as e:
+                # При ошибке возвращаем секцию в pending
+                cur.execute("UPDATE document_sections SET status = 'pending', updated_at = NOW() WHERE id = %s", (section['id'],))
+                conn.commit()
+                conn.close()
+                raise e
         
         if mode == 'check_quality':
             text = body.get('text', '')
