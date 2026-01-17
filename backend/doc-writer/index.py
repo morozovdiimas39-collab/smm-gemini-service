@@ -156,7 +156,8 @@ def improve_text_prompt(original_prompt: str, iteration: int, quality_level: str
     return f"{original_prompt}\n\n{'='*50}\n{strategy_text}\n{'='*50}\n\nТеперь напиши текст полностью по-новому с этим подходом!"
 
 def generate_with_gemini(prompt: str, api_key: str, proxy_url: str = None) -> str:
-    '''Генерирует текст через Gemini API'''
+    '''Генерирует текст через Gemini API с retry при rate limit'''
+    import time
     gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}'
     
     gemini_request = {
@@ -176,14 +177,25 @@ def generate_with_gemini(prompt: str, api_key: str, proxy_url: str = None) -> st
         opener = urllib.request.build_opener(proxy_handler)
         urllib.request.install_opener(opener)
     
-    try:
-        with urllib.request.urlopen(req, timeout=20) as response:
-            gemini_response = json.loads(response.read().decode('utf-8'))
-    except Exception:
-        raise Exception('Слишком большой документ. Уменьшите количество страниц до 10-15')
-    
-    if 'candidates' in gemini_response and gemini_response['candidates']:
-        return gemini_response['candidates'][0]['content']['parts'][0]['text'].strip()
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            with urllib.request.urlopen(req, timeout=20) as response:
+                gemini_response = json.loads(response.read().decode('utf-8'))
+                if 'candidates' in gemini_response and gemini_response['candidates']:
+                    return gemini_response['candidates'][0]['content']['parts'][0]['text'].strip()
+                raise Exception('Не удалось сгенерировать текст')
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 5
+                time.sleep(wait_time)
+                continue
+            raise Exception('Слишком много запросов к API. Подождите немного и попробуйте снова')
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            raise Exception(f'Ошибка генерации: {str(e)}')
     
     raise Exception('Не удалось сгенерировать текст')
 

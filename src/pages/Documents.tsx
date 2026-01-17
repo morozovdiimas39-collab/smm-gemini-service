@@ -133,9 +133,9 @@ export default function Documents() {
       const totalSections = jobData.total_sections;
       
       let activeWorkers = 0;
-      const MAX_WORKERS = 3;
+      const MAX_WORKERS = 1;
       
-      // Функция запуска воркера
+      // Функция запуска воркера с задержкой
       const startWorker = () => {
         if (activeWorkers >= MAX_WORKERS) return;
         activeWorkers++;
@@ -147,17 +147,16 @@ export default function Documents() {
         })
           .then(() => {
             activeWorkers--;
-            startWorker(); // Запускаем следующего
+            setTimeout(startWorker, 3000); // Задержка 3 секунды между воркерами
           })
           .catch(() => {
             activeWorkers--;
+            setTimeout(startWorker, 5000); // При ошибке ждём 5 секунд
           });
       };
       
-      // Запускаем первых воркеров
-      for (let i = 0; i < MAX_WORKERS; i++) {
-        startWorker();
-      }
+      // Запускаем первого воркера
+      startWorker();
       
       // Опрашиваем статус каждые 2 секунды
       const pollInterval = setInterval(async () => {
