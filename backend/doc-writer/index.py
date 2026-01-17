@@ -371,12 +371,13 @@ def handler(event: dict, context) -> dict:
             conn.autocommit = False
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             
-            # Берём 1 секцию со статусом pending
+            # Берём 1 секцию со статусом pending ИЛИ processing (если зависла > 30 секунд)
             cur.execute("""
                 SELECT s.*, j.doc_type, j.subject, j.pages, j.topics, j.additional_info, j.quality_level
                 FROM document_sections s
                 JOIN document_jobs j ON s.job_id = j.id
-                WHERE s.status = 'pending'
+                WHERE s.status = 'pending' 
+                   OR (s.status = 'processing' AND s.updated_at < NOW() - INTERVAL '30 seconds')
                 ORDER BY s.created_at
                 LIMIT 1
             """)
