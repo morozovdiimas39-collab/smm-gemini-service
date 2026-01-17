@@ -348,84 +348,25 @@ def handler(event: dict, context) -> dict:
                 'isBase64Encoded': False
             }
         
-        if mode == 'process_section':
-            dsn = os.environ.get('DATABASE_URL')
-            api_key = os.environ.get('GEMINI_API_KEY')
-            proxy_url = os.environ.get('PROXY_URL')
-            
-            if not dsn:
-                return {
-                    'statusCode': 500,
-                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                    'body': json.dumps({'error': 'DATABASE_URL не настроен'}),
-                    'isBase64Encoded': False
-                }
-            
-            if not api_key:
-                return {
-                    'statusCode': 500,
-                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                    'body': json.dumps({'error': 'GEMINI_API_KEY не настроен'}),
-                    'isBase64Encoded': False
-                }
-            
-            conn = psycopg2.connect(dsn)
-            conn.autocommit = False
-            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            
-            # Берём 1 секцию со статусом pending ИЛИ processing (если зависла > 30 секунд)
-            cur.execute("""
-                SELECT s.*, j.doc_type, j.subject, j.pages, j.topics, j.additional_info, j.quality_level
-                FROM document_sections s
-                JOIN document_jobs j ON s.job_id = j.id
-                WHERE s.status = 'pending' 
-                   OR (s.status = 'processing' AND s.updated_at < NOW() - INTERVAL '30 seconds')
-                ORDER BY s.created_at
-                LIMIT 1
-            """)
-            section = cur.fetchone()
-            
-            if not section:
-                conn.close()
-                return {
-                    'statusCode': 200,
-                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                    'body': json.dumps({'message': 'Нет задач'}),
-                    'isBase64Encoded': False
-                }
-            
-            # Обновляем статус на processing
-            cur.execute("UPDATE document_sections SET status = 'processing', updated_at = NOW() WHERE id = %s", (section['id'],))
-            conn.commit()
-            
-            # Настройки качества
-            quality_settings = {
-                'standard': {'max_attempts': 1, 'ai_threshold': 85, 'uniqueness_threshold': 30},
-                'high': {'max_attempts': 2, 'ai_threshold': 70, 'uniqueness_threshold': 50},
-                'max': {'max_attempts': 3, 'ai_threshold': 60, 'uniqueness_threshold': 60}
-            }
-            settings = quality_settings.get(section['quality_level'], quality_settings['high'])
-            
-            # Генерируем текст
+        if mode == 'section':
             words_per_page = 300
-            total_words_needed = section['pages'] * words_per_page
-            topics_list = json.loads(section['topics']) if isinstance(section['topics'], str) else section['topics']
-            sections_count = len(topics_list) if topics_list else 5
+            total_words_needed = pages * words_per_page
+            sections_count = len(topics) if topics else 5
             words_for_intro_conclusion = 400
             words_for_sections = total_words_needed - words_for_intro_conclusion
             words_per_section = words_for_sections // sections_count if sections_count > 0 else 500
             
             target_words = words_per_section
-            if 'введение' in section['section_title'].lower() or 'заключение' in section['section_title'].lower():
+            if 'введение' in section_title.lower() or 'заключение' in section_title.lower():
                 target_words = 200
             
-            # КРИТИЧНО: Ограничиваем до 800 слов, чтобы Gemini успел за 30 секунд
-            target_words = min(target_words, 800)
+            # КРИТИЧНО: Ограничиваем до 600 слов max, чтобы успеть за 25 секунд
+            target_words = min(target_words, 600)
             
-            base_prompt = f"""Ты студент, который пишет {section['doc_type']} на тему: {section['subject']}
+            prompt = f"""Ты студент, который пишет {doc_type} на тему: {subject}
 
-РАЗДЕЛ: {section['section_title']}
-О ЧЕМ ПИСАТЬ: {section['section_description']}
+РАЗДЕЛ: {section_title}
+О ЧЕМ ПИСАТЬ: {section_description}
 
 ТРЕБОВАНИЯ К ОБЪЕМУ:
 - Ровно {target_words} слов (не меньше!)
@@ -441,41 +382,22 @@ def handler(event: dict, context) -> dict:
 8. Используй риторические вопросы иногда
 9. Пиши так, чтобы было интересно читать
 
-{f"ДОПОЛНИТЕЛЬНО: {section['additional_info']}" if section['additional_info'] else ''}
+{f"ДОПОЛНИТЕЛЬНО: {additional_info}" if additional_info else ''}
 
 ВАЖНО: 
 - Текст должен звучать как написал человек, а не робот
 - {target_words} слов - строго!
 - Напиши ТОЛЬКО текст раздела без заголовка"""
 
-            # КРИТИЧНО: Генерируем БЕЗ проверки качества для скорости (<30 сек)
-            try:
-                result_text = generate_with_gemini(base_prompt, api_key, proxy_url)
-                result_text = humanize_text(result_text)
-                
-                # Сохраняем результат БЕЗ проверки качества
-                cur.execute("""
-                    UPDATE document_sections 
-                    SET content = %s, ai_score = NULL, uniqueness_score = NULL, 
-                        attempt_num = 1, status = 'completed', updated_at = NOW()
-                    WHERE id = %s
-                """, (result_text, section['id']))
-                
-                conn.commit()
-                conn.close()
-                
-                return {
-                    'statusCode': 200,
-                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                    'body': json.dumps({'message': 'Раздел сгенерирован', 'section_id': str(section['id'])}),
-                    'isBase64Encoded': False
-                }
-            except Exception as e:
-                # При ошибке возвращаем секцию в pending
-                cur.execute("UPDATE document_sections SET status = 'pending', updated_at = NOW() WHERE id = %s", (section['id'],))
-                conn.commit()
-                conn.close()
-                raise e
+            result_text = generate_with_gemini(prompt, api_key, proxy_url)
+            result_text = humanize_text(result_text)
+            
+            return {
+                'statusCode': 200,
+                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'body': json.dumps({'text': result_text}, ensure_ascii=False),
+                'isBase64Encoded': False
+            }
         
         if mode == 'check_quality':
             text = body.get('text', '')
