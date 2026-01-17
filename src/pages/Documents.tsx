@@ -109,6 +109,175 @@ export default function Documents() {
     setGenerationProgress(0);
 
     try {
+      // Создаём задачу
+      const createJobResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: 'create_job',
+          docType,
+          subject,
+          pages,
+          topics,
+          additionalInfo,
+          qualityLevel
+        }),
+      });
+      
+      const jobData = await createJobResponse.json();
+      if (!createJobResponse.ok || !jobData.job_id) {
+        throw new Error('Не удалось создать задачу');
+      }
+      
+      const jobId = jobData.job_id;
+      const totalSections = jobData.total_sections;
+      
+      let activeWorkers = 0;
+      const MAX_WORKERS = 1;
+      let currentDelay = 6000; // 6 секунд между запросами
+      const MIN_DELAY = 4000;
+      const MAX_DELAY = 15000;
+      
+      // Функция запуска воркера
+      const startWorker = () => {
+        if (activeWorkers >= MAX_WORKERS) return;
+        activeWorkers++;
+        
+        fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'process_section' }),
+        })
+          .then(async (response) => {
+            activeWorkers--;
+            
+            if (!response.ok) {
+              const errorData = await response.json().catch(() => ({}));
+              
+              // Если Rate Limit - увеличиваем задержку
+              if (response.status === 429 || (errorData.error && errorData.error.includes('Rate limit'))) {
+                currentDelay = Math.min(currentDelay + 3000, MAX_DELAY);
+                console.log(`Rate limit, delay: ${currentDelay}ms`);
+              }
+            } else {
+              // Успех - можно уменьшать задержку
+              currentDelay = Math.max(currentDelay - 500, MIN_DELAY);
+            }
+            
+            setTimeout(startWorker, currentDelay);
+          })
+          .catch((err) => {
+            activeWorkers--;
+            console.error('Worker error:', err);
+            currentDelay = Math.min(currentDelay + 2000, MAX_DELAY);
+            setTimeout(startWorker, currentDelay);
+          });
+      };
+      
+      // Запускаем первого воркера
+      startWorker();
+      
+      // Опрашиваем статус каждые 2 секунды
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              mode: 'get_status',
+              job_id: jobId
+            }),
+          });
+          
+          const statusData = await statusResponse.json();
+          if (!statusResponse.ok) {
+            clearInterval(pollInterval);
+            throw new Error('Не удалось получить статус');
+          }
+          
+          const { sections, completed, total, job_status } = statusData;
+          
+          // Обновляем прогресс
+          setGenerationProgress(Math.floor((completed / total) * 100));
+          
+          // Собираем документ
+          let fullDocument = `${docType.toUpperCase()}\n\nТема: ${subject}\n\n`;
+          
+          for (const section of sections.sort((a, b) => a.index - b.index)) {
+            if (section.index === 0) {
+              fullDocument += 'ВВЕДЕНИЕ\n\n';
+            } else if (section.index === total - 1) {
+              fullDocument += 'ЗАКЛЮЧЕНИЕ\n\n';
+            } else {
+              fullDocument += `${section.index}. ${section.title.toUpperCase()}\n\n`;
+            }
+            
+            if (section.content) {
+              fullDocument += section.content + '\n\n';
+            } else if (section.status === 'processing') {
+              fullDocument += '[Генерируется...]\n\n';
+            } else if (section.status === 'pending') {
+              fullDocument += '[Ожидает генерации...]\n\n';
+            }
+          }
+          
+          setGeneratedDocument(fullDocument);
+          
+          // Если всё готово - останавливаем опрос
+          if (job_status === 'completed') {
+            clearInterval(pollInterval);
+            setGenerationProgress(100);
+            toast({
+              title: 'Готово! 🎉',
+              description: 'Документ успешно создан',
+            });
+            setIsGeneratingDocument(false);
+          }
+        } catch (err) {
+          console.error('Ошибка опроса статуса:', err);
+        }
+      }, 2000);
+      
+      // Останавливаем через 20 минут принудительно
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        if (isGeneratingDocument) {
+          setIsGeneratingDocument(false);
+          toast({
+            title: 'Таймаут',
+            description: 'Генерация заняла слишком много времени',
+            variant: 'destructive',
+          });
+        }
+      }, 1200000);
+      
+    } catch (error) {
+      toast({
+        title: 'Ошибка генерации',
+        description: 'Не удалось создать документ. Попробуйте еще раз.',
+        variant: 'destructive',
+      });
+      console.error(error);
+      setIsGeneratingDocument(false);
+      setGenerationProgress(0);
+    }
+  };
+
+  const generateDocumentOld = async () => {
+    if (topics.length === 0) {
+      toast({
+        title: 'Ошибка',
+        description: 'Сначала сгенерируйте темы',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setIsGeneratingDocument(true);
+    setGeneratedDocument('');
+    setGenerationProgress(0);
+
+    try {
       let fullDocument = `${docType.toUpperCase()}\n\nТема: ${subject}\n\n`;
       let introText = '';
       
