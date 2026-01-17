@@ -134,8 +134,11 @@ export default function Documents() {
       
       let activeWorkers = 0;
       const MAX_WORKERS = 1;
+      let currentDelay = 8000; // Начинаем с 8 секунд (безопасно для 15 req/min)
+      const MIN_DELAY = 5000;
+      const MAX_DELAY = 20000;
       
-      // Функция запуска воркера с задержкой
+      // Функция запуска воркера с адаптивной задержкой
       const startWorker = () => {
         if (activeWorkers >= MAX_WORKERS) return;
         activeWorkers++;
@@ -145,13 +148,33 @@ export default function Documents() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ mode: 'process_section' }),
         })
-          .then(() => {
+          .then(async (response) => {
             activeWorkers--;
-            setTimeout(startWorker, 3000); // Задержка 3 секунды между воркерами
+            
+            if (!response.ok) {
+              const errorData = await response.json().catch(() => ({}));
+              
+              // Если Rate Limit - увеличиваем задержку
+              if (response.status === 429 || (errorData.error && errorData.error.includes('Rate limit'))) {
+                currentDelay = Math.min(currentDelay + 5000, MAX_DELAY);
+                console.log(`Rate limit hit, increasing delay to ${currentDelay}ms`);
+                setTimeout(startWorker, currentDelay);
+              } else {
+                // Другая ошибка - retry через текущую задержку
+                setTimeout(startWorker, currentDelay);
+              }
+            } else {
+              // Успешно - можно постепенно уменьшать задержку
+              currentDelay = Math.max(currentDelay - 1000, MIN_DELAY);
+              setTimeout(startWorker, currentDelay);
+            }
           })
-          .catch(() => {
+          .catch((err) => {
             activeWorkers--;
-            setTimeout(startWorker, 5000); // При ошибке ждём 5 секунд
+            console.error('Worker error:', err);
+            // При network ошибке - retry через увеличенную задержку
+            currentDelay = Math.min(currentDelay + 3000, MAX_DELAY);
+            setTimeout(startWorker, currentDelay);
           });
       };
       
