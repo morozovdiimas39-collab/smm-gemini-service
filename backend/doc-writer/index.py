@@ -419,6 +419,9 @@ def handler(event: dict, context) -> dict:
             if 'введение' in section['section_title'].lower() or 'заключение' in section['section_title'].lower():
                 target_words = 200
             
+            # КРИТИЧНО: Ограничиваем до 800 слов, чтобы Gemini успел за 30 секунд
+            target_words = min(target_words, 800)
+            
             base_prompt = f"""Ты студент, который пишет {section['doc_type']} на тему: {section['subject']}
 
 РАЗДЕЛ: {section['section_title']}
@@ -445,37 +448,18 @@ def handler(event: dict, context) -> dict:
 - {target_words} слов - строго!
 - Напиши ТОЛЬКО текст раздела без заголовка"""
 
-            best_text = None
-            best_scores = {'ai_score': 100, 'uniqueness_score': 0}
-            
+            # КРИТИЧНО: Генерируем БЕЗ проверки качества для скорости (<30 сек)
             try:
-                for attempt in range(1, settings['max_attempts'] + 1):
-                    prompt = improve_text_prompt(base_prompt, attempt, section['quality_level'])
-                    result_text = generate_with_gemini(prompt, api_key, proxy_url)
-                    result_text = humanize_text(result_text)
-                    
-                    try:
-                        scores = check_content_quality(result_text, api_key, proxy_url)
-                        ai_score = scores.get('ai_score', 50)
-                        uniqueness_score = scores.get('uniqueness_score', 50)
-                        
-                        if best_text is None or (ai_score <= best_scores['ai_score'] and uniqueness_score >= best_scores['uniqueness_score']):
-                            best_text = result_text
-                            best_scores = {'ai_score': ai_score, 'uniqueness_score': uniqueness_score}
-                        
-                        if ai_score <= settings['ai_threshold'] and uniqueness_score >= settings['uniqueness_threshold']:
-                            break
-                    except Exception:
-                        if best_text is None:
-                            best_text = result_text
+                result_text = generate_with_gemini(base_prompt, api_key, proxy_url)
+                result_text = humanize_text(result_text)
                 
-                # Сохраняем результат
+                # Сохраняем результат БЕЗ проверки качества
                 cur.execute("""
                     UPDATE document_sections 
-                    SET content = %s, ai_score = %s, uniqueness_score = %s, 
-                        attempt_num = %s, status = 'completed', updated_at = NOW()
+                    SET content = %s, ai_score = NULL, uniqueness_score = NULL, 
+                        attempt_num = 1, status = 'completed', updated_at = NOW()
                     WHERE id = %s
-                """, (best_text, best_scores['ai_score'], best_scores['uniqueness_score'], settings['max_attempts'], section['id']))
+                """, (result_text, section['id']))
                 
                 conn.commit()
                 conn.close()
