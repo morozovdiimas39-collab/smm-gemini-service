@@ -363,7 +363,19 @@ def handler(event: dict, context) -> dict:
             # КРИТИЧНО: Ограничиваем до 600 слов max, чтобы успеть за 25 секунд
             target_words = min(target_words, 600)
             
-            prompt = f"""Ты студент, который пишет {doc_type} на тему: {subject}
+            # Пороги качества по уровню
+            ai_threshold = settings['ai_threshold']
+            uniqueness_threshold = settings['uniqueness_threshold']
+            max_attempts = settings['max_attempts']
+            
+            best_text = None
+            best_ai_score = 100
+            best_uniqueness_score = 0
+            
+            for attempt in range(1, max_attempts + 1):
+                # Меняем промпт на каждой попытке
+                if attempt == 1:
+                    prompt = f"""Ты студент, который пишет {doc_type} на тему: {subject}
 
 РАЗДЕЛ: {section_title}
 О ЧЕМ ПИСАТЬ: {section_description}
@@ -388,14 +400,67 @@ def handler(event: dict, context) -> dict:
 - Текст должен звучать как написал человек, а не робот
 - {target_words} слов - строго!
 - Напиши ТОЛЬКО текст раздела без заголовка"""
+                else:
+                    # Улучшенный промпт для следующих попыток
+                    prompt = improve_text_prompt(f"""Ты студент, который пишет {doc_type} на тему: {subject}
 
-            result_text = generate_with_gemini(prompt, api_key, proxy_url)
-            result_text = humanize_text(result_text)
+РАЗДЕЛ: {section_title}
+О ЧЕМ ПИСАТЬ: {section_description}
+
+ОБЪЕМ: {target_words} слов
+
+{f"ДОПОЛНИТЕЛЬНО: {additional_info}" if additional_info else ''}""", attempt, quality_level)
+                
+                result_text = generate_with_gemini(prompt, api_key, proxy_url)
+                result_text = humanize_text(result_text)
+                
+                # Проверяем качество
+                try:
+                    scores = check_content_quality(result_text, api_key, proxy_url)
+                    ai_score = scores.get('ai_score', 50)
+                    uniqueness_score = scores.get('uniqueness_score', 50)
+                    
+                    # Сохраняем лучший вариант
+                    if ai_score < best_ai_score or (ai_score == best_ai_score and uniqueness_score > best_uniqueness_score):
+                        best_text = result_text
+                        best_ai_score = ai_score
+                        best_uniqueness_score = uniqueness_score
+                    
+                    # Если прошли пороги - возвращаем сразу
+                    if ai_score <= ai_threshold and uniqueness_score >= uniqueness_threshold:
+                        return {
+                            'statusCode': 200,
+                            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                            'body': json.dumps({
+                                'text': result_text,
+                                'quality': {
+                                    'ai_score': ai_score,
+                                    'uniqueness_score': uniqueness_score,
+                                    'attempts': attempt,
+                                    'passed': True
+                                }
+                            }, ensure_ascii=False),
+                            'isBase64Encoded': False
+                        }
+                except Exception as e:
+                    # Если проверка упала - используем текст как есть
+                    print(f"Quality check failed on attempt {attempt}: {e}")
+                    if not best_text:
+                        best_text = result_text
             
+            # Если не прошли пороги - возвращаем лучший вариант
             return {
                 'statusCode': 200,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'text': result_text}, ensure_ascii=False),
+                'body': json.dumps({
+                    'text': best_text,
+                    'quality': {
+                        'ai_score': best_ai_score,
+                        'uniqueness_score': best_uniqueness_score,
+                        'attempts': max_attempts,
+                        'passed': False
+                    }
+                }, ensure_ascii=False),
                 'isBase64Encoded': False
             }
         
