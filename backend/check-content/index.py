@@ -78,7 +78,7 @@ def handler(event: dict, context) -> dict:
 
 ВАЖНО: Отвечай ТОЛЬКО JSON, без текста до и после!"""
 
-        gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}'
+        gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}'
         
         gemini_request = {
             'contents': [{
