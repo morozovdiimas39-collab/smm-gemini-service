@@ -177,7 +177,7 @@ def generate_with_gemini(prompt: str, api_key: str, proxy_url: str = None) -> st
         urllib.request.install_opener(opener)
     
     try:
-        with urllib.request.urlopen(req, timeout=20) as response:
+        with urllib.request.urlopen(req, timeout=45) as response:
             gemini_response = json.loads(response.read().decode('utf-8'))
             if 'candidates' in gemini_response and gemini_response['candidates']:
                 return gemini_response['candidates'][0]['content']['parts'][0]['text'].strip()
