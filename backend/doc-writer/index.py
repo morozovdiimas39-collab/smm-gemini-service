@@ -62,7 +62,7 @@ def check_content_quality(text: str, api_key: str, proxy_url: str = None) -> dic
 
 ВАЖНО: Отвечай ТОЛЬКО JSON!"""
 
-    gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}'
+    gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}'
     
     gemini_request = {
         'contents': [{
@@ -157,7 +157,7 @@ def improve_text_prompt(original_prompt: str, iteration: int, quality_level: str
 
 def generate_with_gemini(prompt: str, api_key: str, proxy_url: str = None) -> str:
     '''Генерирует текст через Gemini API БЕЗ retry (retry на фронтенде)'''
-    gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}'
+    gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}'
     
     gemini_request = {
         'contents': [{
