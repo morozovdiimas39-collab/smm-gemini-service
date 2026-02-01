@@ -102,7 +102,7 @@ def handler(event: dict, context) -> dict:
                 'body': json.dumps({'error': 'GEMINI_API_KEY не настроен'})
             }
         
-        gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={gemini_api_key}'
+        gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={gemini_api_key}'
         
         gemini_request = {
             'contents': [{
