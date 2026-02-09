@@ -3,10 +3,9 @@ import os
 import urllib.request
 import urllib.error
 import base64
-import uuid
 
 def handler(event: dict, context) -> dict:
-    '''API для генерации изображений через Gemini 2.5 Flash Image (Nano Banana)'''
+    '''API для генерации изображений через Flux (Black Forest Labs)'''
     
     method = event.get('httpMethod', 'GET')
     
@@ -59,79 +58,82 @@ def handler(event: dict, context) -> dict:
             'граффити': 'Graffiti art style, urban street art, bold spray paint, expressive'
         }
         
-        aspect_ratio_map = {
-            'квадрат': '1:1',
-            'горизонтальный': '16:9',
-            'вертикальный': '9:16',
-            'горизонтальный_широкий': '3:2'
-        }
-        
         style_instruction = style_prompts.get(style, '')
-        aspect_instruction = aspect_ratio_map.get(aspect_ratio, '1:1')
+        prompt = f"{task}. Style: {style_instruction}. High quality, detailed."
         
-        prompt = f"{task}. Style: {style_instruction}. Aspect ratio: {aspect_instruction}. High quality, detailed."
+        flux_api_key = os.environ.get('BFL_API_KEY')
         
-        gemini_api_key = os.environ.get('GEMINI_API_KEY')
-        proxy_url = os.environ.get('PROXY_URL')
-        
-        if not gemini_api_key:
+        if not flux_api_key:
             return {
                 'statusCode': 500,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'GEMINI_API_KEY не настроен'})
+                'body': json.dumps({'error': 'BFL_API_KEY не настроен'})
             }
         
-        gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={gemini_api_key}'
+        flux_url = 'https://api.bfl.ml/v1/flux-pro-1.1'
         
-        gemini_request = {
-            'contents': [{
-                'parts': [{
-                    'text': prompt
-                }]
-            }]
+        flux_request = {
+            'prompt': prompt,
+            'width': 1024,
+            'height': 1024
         }
         
         req = urllib.request.Request(
-            gemini_url,
-            data=json.dumps(gemini_request).encode('utf-8'),
-            headers={'Content-Type': 'application/json'}
+            flux_url,
+            data=json.dumps(flux_request).encode('utf-8'),
+            headers={
+                'Content-Type': 'application/json',
+                'X-Key': flux_api_key
+            }
         )
         
-        if proxy_url:
-            proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
-            opener = urllib.request.build_opener(proxy_handler)
-            urllib.request.install_opener(opener)
-        
         with urllib.request.urlopen(req, timeout=60) as response:
-            gemini_response = json.loads(response.read().decode('utf-8'))
+            flux_response = json.loads(response.read().decode('utf-8'))
         
-        if 'candidates' in gemini_response and len(gemini_response['candidates']) > 0:
-            parts = gemini_response['candidates'][0]['content']['parts']
+        if 'id' in flux_response:
+            task_id = flux_response['id']
             
-            for part in parts:
-                if 'inlineData' in part and 'data' in part['inlineData']:
-                    image_data = part['inlineData']['data']
-                    mime_type = part['inlineData'].get('mimeType', 'image/png')
-                    
+            import time
+            max_attempts = 30
+            for attempt in range(max_attempts):
+                time.sleep(2)
+                
+                result_req = urllib.request.Request(
+                    f'https://api.bfl.ml/v1/get_result?id={task_id}',
+                    headers={'X-Key': flux_api_key}
+                )
+                
+                with urllib.request.urlopen(result_req, timeout=30) as result_response:
+                    result_data = json.loads(result_response.read().decode('utf-8'))
+                
+                if result_data.get('status') == 'Ready':
+                    image_url = result_data.get('result', {}).get('sample')
+                    if image_url:
+                        return {
+                            'statusCode': 200,
+                            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                            'body': json.dumps({
+                                'imageUrl': image_url,
+                                'prompt': prompt
+                            })
+                        }
+                elif result_data.get('status') == 'Error':
                     return {
-                        'statusCode': 200,
+                        'statusCode': 500,
                         'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                        'body': json.dumps({
-                            'imageUrl': f'data:{mime_type};base64,{image_data}',
-                            'prompt': prompt
-                        })
+                        'body': json.dumps({'error': 'Ошибка генерации изображения', 'details': result_data})
                     }
             
             return {
                 'statusCode': 500,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Нет изображения в ответе', 'response': gemini_response})
+                'body': json.dumps({'error': 'Превышено время ожидания генерации'})
             }
         else:
             return {
                 'statusCode': 500,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Не удалось получить ответ', 'response': gemini_response})
+                'body': json.dumps({'error': 'Не удалось запустить генерацию', 'response': flux_response})
             }
     
     except urllib.error.HTTPError as e:
@@ -139,7 +141,7 @@ def handler(event: dict, context) -> dict:
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': f'Gemini API error: {e.code}', 'details': error_body})
+            'body': json.dumps({'error': f'Flux API error: {e.code}', 'details': error_body})
         }
     
     except Exception as e:
