@@ -5,10 +5,10 @@ import urllib.error
 import base64
 
 def handler(event: dict, context) -> dict:
-    '''API для генерации изображений через Flux (Black Forest Labs)'''
-    
+    '''Генерация изображений через Gemini (gemini-2.0-flash-preview-image-generation)'''
+
     method = event.get('httpMethod', 'GET')
-    
+
     if method == 'OPTIONS':
         return {
             'statusCode': 200,
@@ -20,29 +20,29 @@ def handler(event: dict, context) -> dict:
             },
             'body': ''
         }
-    
+
     if method != 'POST':
         return {
             'statusCode': 405,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
             'body': json.dumps({'error': 'Method not allowed'})
         }
-    
+
     try:
         body_str = event.get('body', '{}')
         request_data = json.loads(body_str)
-        
+
         task = request_data.get('task', '')
         style = request_data.get('style', 'фотореализм')
         aspect_ratio = request_data.get('aspectRatio', 'квадрат')
-        
+
         if not task:
             return {
                 'statusCode': 400,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
                 'body': json.dumps({'error': 'Описание изображения не указано'})
             }
-        
+
         style_prompts = {
             'фотореализм': 'Photorealistic, ultra-detailed, professional photography, high quality',
             'иллюстрация': 'Digital illustration, artistic style, vibrant colors, creative design',
@@ -57,93 +57,91 @@ def handler(event: dict, context) -> dict:
             'пастель': 'Pastel colors, soft tones, dreamy atmosphere, gentle light',
             'граффити': 'Graffiti art style, urban street art, bold spray paint, expressive'
         }
-        
+
         style_instruction = style_prompts.get(style, '')
         prompt = f"{task}. Style: {style_instruction}. High quality, detailed."
-        
-        flux_api_key = os.environ.get('BFL_API_KEY')
-        
-        if not flux_api_key:
+
+        api_key = os.environ.get('GEMINI_API_KEY')
+        proxy_url = os.environ.get('PROXY_URL')
+
+        if not api_key:
             return {
                 'statusCode': 500,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'BFL_API_KEY не настроен'})
+                'body': json.dumps({'error': 'GEMINI_API_KEY не настроен'})
             }
-        
-        flux_url = 'https://api.bfl.ml/v1/flux-pro-1.1'
-        
-        flux_request = {
-            'prompt': prompt,
-            'width': 1024,
-            'height': 1024
+
+        # Модель с поддержкой генерации изображений (preview)
+        model_id = 'gemini-2.0-flash-preview-image-generation'
+        gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}'
+
+        gemini_request = {
+            'contents': [{'parts': [{'text': prompt}]}],
+            'generationConfig': {
+                'responseModalities': ['TEXT', 'IMAGE'],
+                'responseMimeType': 'image/png'
+            }
         }
-        
+
         req = urllib.request.Request(
-            flux_url,
-            data=json.dumps(flux_request).encode('utf-8'),
-            headers={
-                'Content-Type': 'application/json',
-                'X-Key': flux_api_key
-            }
+            gemini_url,
+            data=json.dumps(gemini_request).encode('utf-8'),
+            headers={'Content-Type': 'application/json'}
         )
-        
-        with urllib.request.urlopen(req, timeout=60) as response:
-            flux_response = json.loads(response.read().decode('utf-8'))
-        
-        if 'id' in flux_response:
-            task_id = flux_response['id']
-            
-            import time
-            max_attempts = 30
-            for attempt in range(max_attempts):
-                time.sleep(2)
-                
-                result_req = urllib.request.Request(
-                    f'https://api.bfl.ml/v1/get_result?id={task_id}',
-                    headers={'X-Key': flux_api_key}
-                )
-                
-                with urllib.request.urlopen(result_req, timeout=30) as result_response:
-                    result_data = json.loads(result_response.read().decode('utf-8'))
-                
-                if result_data.get('status') == 'Ready':
-                    image_url = result_data.get('result', {}).get('sample')
-                    if image_url:
-                        return {
-                            'statusCode': 200,
-                            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                            'body': json.dumps({
-                                'imageUrl': image_url,
-                                'prompt': prompt
-                            })
-                        }
-                elif result_data.get('status') == 'Error':
-                    return {
-                        'statusCode': 500,
-                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                        'body': json.dumps({'error': 'Ошибка генерации изображения', 'details': result_data})
-                    }
-            
+
+        if proxy_url:
+            proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
+            opener = urllib.request.build_opener(proxy_handler)
+            urllib.request.install_opener(opener)
+
+        with urllib.request.urlopen(req, timeout=120) as response:
+            gemini_response = json.loads(response.read().decode('utf-8'))
+
+        # Достаём изображение из ответа (inlineData в parts)
+        if 'candidates' not in gemini_response or not gemini_response['candidates']:
             return {
                 'statusCode': 500,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Превышено время ожидания генерации'})
+                'body': json.dumps({'error': 'Gemini не вернул результат', 'details': gemini_response})
             }
-        else:
+
+        parts = gemini_response['candidates'][0].get('content', {}).get('parts', [])
+        image_b64 = None
+        mime_type = 'image/png'
+
+        for part in parts:
+            if 'inlineData' in part:
+                image_b64 = part['inlineData'].get('data')
+                mime_type = part['inlineData'].get('mimeType', 'image/png')
+                break
+
+        if not image_b64:
             return {
                 'statusCode': 500,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Не удалось запустить генерацию', 'response': flux_response})
+                'body': json.dumps({'error': 'В ответе Gemini нет изображения', 'details': str(parts)[:500]})
             }
-    
+
+        # Фронт ожидает imageUrl — отдаём data URL
+        image_url = f"data:{mime_type};base64,{image_b64}"
+
+        return {
+            'statusCode': 200,
+            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+            'body': json.dumps({
+                'imageUrl': image_url,
+                'prompt': prompt
+            })
+        }
+
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8') if e.fp else 'Unknown error'
+        error_body = e.read().decode('utf-8') if e.fp else str(e)
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': f'Flux API error: {e.code}', 'details': error_body})
+            'body': json.dumps({'error': f'Gemini API error: {e.code}', 'details': error_body[:500]})
         }
-    
+
     except Exception as e:
         return {
             'statusCode': 500,

@@ -62,7 +62,7 @@ export default function ImageGenerator() {
     setGeneratedImageUrl('');
 
     try {
-      const response = await fetch('https://functions.poehali.dev/845a219c-f5be-4bfa-b613-1242db9bc98f', {
+      const response = await fetch('https://functions.yandexcloud.net/d4e0l4059mc7lrjj3d3b', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

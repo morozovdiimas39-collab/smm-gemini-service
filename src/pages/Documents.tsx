@@ -42,7 +42,7 @@ export default function Documents() {
     setGeneratedDocument('');
 
     try {
-      const response = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+      const response = await fetch('https://functions.yandexcloud.net/d4ep127ik5qbfueas45d', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -114,7 +114,7 @@ export default function Documents() {
       
       fullDocument += 'ВВЕДЕНИЕ\n\n';
       try {
-        const introResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+        const introResponse = await fetch('https://functions.yandexcloud.net/d4ep127ik5qbfueas45d', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -162,7 +162,7 @@ export default function Documents() {
           try {
             await new Promise(resolve => setTimeout(resolve, 3000));
             
-            const sectionResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+            const sectionResponse = await fetch('https://functions.yandexcloud.net/d4ep127ik5qbfueas45d', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -212,7 +212,7 @@ export default function Documents() {
 
       fullDocument += 'ЗАКЛЮЧЕНИЕ\n\n';
       try {
-        const conclusionResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+        const conclusionResponse = await fetch('https://functions.yandexcloud.net/d4ep127ik5qbfueas45d', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -333,7 +333,7 @@ export default function Documents() {
                   await new Promise(resolve => setTimeout(resolve, 3000 * retryCount));
                 }
                 
-                const response = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+                const response = await fetch('https://functions.yandexcloud.net/d4ep127ik5qbfueas45d', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
@@ -406,7 +406,7 @@ export default function Documents() {
       let fullDocument = `${docType.toUpperCase()}\n\nТема: ${subject}\n\n`;
       
       fullDocument += 'ВВЕДЕНИЕ\n\n';
-      const introResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+      const introResponse = await fetch('https://functions.yandexcloud.net/d4ep127ik5qbfueas45d', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -435,7 +435,7 @@ export default function Documents() {
         const topic = topics[i];
         fullDocument += `${i + 1}. ${topic.title.toUpperCase()}\n\n`;
         
-        const sectionResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+        const sectionResponse = await fetch('https://functions.yandexcloud.net/d4ep127ik5qbfueas45d', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -464,7 +464,7 @@ export default function Documents() {
       }
 
       fullDocument += 'ЗАКЛЮЧЕНИЕ\n\n';
-      const conclusionResponse = await fetch('https://functions.poehali.dev/338a4621-b5c0-4b9c-be04-0ed58cd55020', {
+      const conclusionResponse = await fetch('https://functions.yandexcloud.net/d4ep127ik5qbfueas45d', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -33,7 +33,7 @@ export default function Index() {
     setGeneratedPost('');
 
     try {
-      const response = await fetch('https://functions.poehali.dev/697e7fd3-b2b2-4eb9-8b2d-c815f9756c06', {
+      const response = await fetch('https://functions.yandexcloud.net/d4env6absccceb6td886', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
