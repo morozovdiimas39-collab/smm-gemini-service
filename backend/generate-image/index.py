@@ -5,7 +5,7 @@ import urllib.error
 import base64
 
 def handler(event: dict, context) -> dict:
-    '''Генерация изображений через Gemini (gemini-2.0-flash-preview-image-generation)'''
+    '''Генерация изображений через Gemini (gemini-2.5-flash-image)'''
 
     method = event.get('httpMethod', 'GET')
 
@@ -35,6 +35,7 @@ def handler(event: dict, context) -> dict:
         task = request_data.get('task', '')
         style = request_data.get('style', 'фотореализм')
         aspect_ratio = request_data.get('aspectRatio', 'квадрат')
+        image_model = request_data.get('imageModel', 'flash')  # 'flash' | 'pro'
 
         if not task:
             return {
@@ -71,15 +72,14 @@ def handler(event: dict, context) -> dict:
                 'body': json.dumps({'error': 'GEMINI_API_KEY не настроен'})
             }
 
-        # Модель с поддержкой генерации изображений (preview)
-        model_id = 'gemini-2.0-flash-preview-image-generation'
+        # Модель: Flash (быстро, дёшево) или Pro / Nano Banana Pro (качество, дороже)
+        model_id = 'gemini-3-pro-image-preview' if image_model == 'pro' else 'gemini-2.5-flash-image'
         gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}'
 
         gemini_request = {
             'contents': [{'parts': [{'text': prompt}]}],
             'generationConfig': {
-                'responseModalities': ['TEXT', 'IMAGE'],
-                'responseMimeType': 'image/png'
+                'responseModalities': ['TEXT', 'IMAGE']
             }
         }
 
@@ -105,21 +105,37 @@ def handler(event: dict, context) -> dict:
                 'body': json.dumps({'error': 'Gemini не вернул результат', 'details': gemini_response})
             }
 
-        parts = gemini_response['candidates'][0].get('content', {}).get('parts', [])
+        content = gemini_response['candidates'][0].get('content') or {}
+        parts = content.get('parts') or []
         image_b64 = None
         mime_type = 'image/png'
 
         for part in parts:
-            if 'inlineData' in part:
-                image_b64 = part['inlineData'].get('data')
-                mime_type = part['inlineData'].get('mimeType', 'image/png')
-                break
+            # REST может вернуть camelCase (inlineData) или snake_case (inline_data)
+            inline = part.get('inlineData') or part.get('inline_data')
+            if inline:
+                image_b64 = inline.get('data')
+                mime_type = inline.get('mimeType') or inline.get('mime_type') or 'image/png'
+                if image_b64:
+                    break
 
         if not image_b64:
+            # Показать структуру ответа для отладки (без больших base64)
+            def _peek(obj, depth=0):
+                if depth > 4:
+                    return '...'
+                if isinstance(obj, dict):
+                    return {k: _peek(v, depth + 1) if k != 'data' else '<base64>' for k, v in obj.items()}
+                if isinstance(obj, list):
+                    return [_peek(x, depth + 1) for x in obj[:3]]
+                return type(obj).__name__
             return {
                 'statusCode': 500,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'В ответе Gemini нет изображения', 'details': str(parts)[:500]})
+                'body': json.dumps({
+                    'error': 'В ответе Gemini нет изображения',
+                    'details': _peek(gemini_response)
+                })
             }
 
         # Фронт ожидает imageUrl — отдаём data URL
@@ -135,11 +151,14 @@ def handler(event: dict, context) -> dict:
         }
 
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8') if e.fp else str(e)
+        try:
+            error_body = e.read().decode('utf-8') if e.fp else str(e)
+        except Exception:
+            error_body = str(e)
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': f'Gemini API error: {e.code}', 'details': error_body[:500]})
+            'body': json.dumps({'error': f'Gemini API error: {e.code}', 'details': error_body})
         }
 
     except Exception as e:

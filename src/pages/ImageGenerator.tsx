@@ -13,6 +13,7 @@ export default function ImageGenerator() {
   const [task, setTask] = useState('');
   const [style, setStyle] = useState('фотореализм');
   const [aspectRatio, setAspectRatio] = useState('квадрат');
+  const [imageModel, setImageModel] = useState<'flash' | 'pro'>('flash');
   const [generatedImageUrl, setGeneratedImageUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
 
@@ -70,7 +71,8 @@ export default function ImageGenerator() {
         body: JSON.stringify({
           task,
           style,
-          aspectRatio
+          aspectRatio,
+          imageModel
         }),
       });
 
@@ -191,6 +193,24 @@ export default function ImageGenerator() {
                   {selectedStyleData.prompt}
                 </p>
               )}
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-lg font-semibold flex items-center gap-2">
+                <Icon name="Cpu" size={20} className="text-secondary" />
+                Модель
+              </Label>
+              <select
+                value={imageModel}
+                onChange={(e) => setImageModel(e.target.value as 'flash' | 'pro')}
+                className="flex h-12 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              >
+                <option value="flash">⚡ Быстрая (Flash) — быстрее, экономнее</option>
+                <option value="pro">✨ Качество (Pro) — лучше детали, ~12₽/картинка</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {imageModel === 'pro' ? 'Nano Banana Pro: выше качество и детализация.' : 'Gemini 2.5 Flash: быстрая генерация.'}
+              </p>
             </div>
 
             <div className="space-y-2">
