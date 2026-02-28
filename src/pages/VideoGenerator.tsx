@@ -10,6 +10,11 @@ import Icon from '@/components/ui/icon';
 
 const GEMINI_KEY_STORAGE = 'gemini_api_key_video';
 
+const videoModels = [
+  { id: 'veo-3.1-generate-preview', label: 'Veo 3.1', description: 'Новейшая модель (превью)' },
+  { id: 'veo-2.0-generate-001', label: 'Veo 2', description: 'Стабильная версия' },
+];
+
 const videoAspectRatios = [
   { value: '16:9', label: '◻️ 16:9 Горизонтальный', description: 'YouTube, экран' },
   { value: '9:16', label: '▭ 9:16 Вертикальный', description: 'Stories, Reels' },
@@ -36,6 +41,7 @@ export default function VideoGenerator() {
   const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [geminiKeyInput, setGeminiKeyInput] = useState('');
   const [hasGeminiKey, setHasGeminiKey] = useState(false);
+  const [videoModel, setVideoModel] = useState(videoModels[0]!.id);
 
   useEffect(() => {
     setHasGeminiKey(!!localStorage.getItem(GEMINI_KEY_STORAGE)?.trim());
@@ -82,6 +88,13 @@ export default function VideoGenerator() {
     toast({ title: 'Ключ сохранён', description: 'Используется только в этом браузере для генерации видео' });
   };
 
+  const clearGeminiKey = () => {
+    localStorage.removeItem(GEMINI_KEY_STORAGE);
+    setHasGeminiKey(false);
+    setGeminiKeyInput('');
+    toast({ title: 'Ключ удалён', variant: 'default' });
+  };
+
   const generateVideo = async () => {
     if (!prompt.trim()) {
       toast({ title: 'Ошибка', description: 'Опишите, какое видео хотите получить', variant: 'destructive' });
@@ -117,7 +130,7 @@ export default function VideoGenerator() {
         config: { numberOfVideos: number; aspectRatio: string; durationSeconds?: number };
         image?: { imageBytes: string; mimeType: string };
       } = {
-        model: 'veo-3.1-generate-preview',
+        model: videoModel,
         prompt: prompt.trim(),
         config: {
           numberOfVideos: 1,
@@ -129,17 +142,30 @@ export default function VideoGenerator() {
         params.image = { imageBytes: referenceImage.data, mimeType: referenceImage.mimeType };
       }
 
-      let operation = await ai.models.generateVideos(params as never);
+      type Op = { done?: boolean; response?: unknown; error?: string; message?: string };
+      let operation = (await ai.models.generateVideos(params as never)) as Op;
 
       while (!operation.done) {
         await new Promise((r) => setTimeout(r, 10000));
-        operation = await ai.operations.getVideosOperation({ operation });
+        operation = (await ai.operations.getVideosOperation({ operation } as never)) as Op;
       }
 
-      const resp = operation.response as { generatedVideos?: Array<{ video?: { uri?: string } }> } | undefined;
+      const resp = operation.response as {
+        generatedVideos?: Array<{ video?: { uri?: string } }>;
+        raiMediaFilteredReasons?: string[];
+        raiMediaFilteredCount?: number;
+      } | undefined;
       const uri = resp?.generatedVideos?.[0]?.video?.uri;
       if (!uri) {
-        throw new Error((operation as { error?: string }).error || 'Нет видео в ответе');
+        const raiReasons = resp?.raiMediaFilteredReasons?.length
+          ? resp.raiMediaFilteredReasons.join(', ')
+          : '';
+        const raiCount = resp?.raiMediaFilteredCount ?? 0;
+        let msg = operation?.error || operation?.message || 'Нет видео в ответе';
+        if (raiCount > 0 || raiReasons) {
+          msg += (msg ? '. ' : '') + `Контент отфильтрован (RAI): ${raiReasons || 'причина не указана'}. Попробуйте смягчить промпт или убрать прямые цитаты/фразы.`;
+        }
+        throw new Error(msg);
       }
 
       const downloadUrl = uri + (uri.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(apiKey);
@@ -220,22 +246,41 @@ export default function VideoGenerator() {
                 </a>
                 . Хранится только в этом браузере, запросы идут напрямую в Google.
               </p>
-              {hasGeminiKey ? (
-                <p className="text-sm text-green-600 dark:text-green-400">✓ Ключ сохранён</p>
-              ) : (
-                <div className="flex gap-2">
-                  <Input
-                    type="password"
-                    placeholder="AIza..."
-                    value={geminiKeyInput}
-                    onChange={(e) => setGeminiKeyInput(e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button type="button" variant="secondary" onClick={saveGeminiKey}>
-                    Сохранить
+              <div className="flex flex-wrap gap-2 items-center">
+                <Input
+                  type="password"
+                  placeholder={hasGeminiKey ? 'Введите новый ключ для замены' : 'AIza...'}
+                  value={geminiKeyInput}
+                  onChange={(e) => setGeminiKeyInput(e.target.value)}
+                  className="flex-1 min-w-[200px]"
+                />
+                <Button type="button" variant="secondary" onClick={saveGeminiKey}>
+                  {hasGeminiKey ? 'Изменить ключ' : 'Сохранить'}
+                </Button>
+                {hasGeminiKey && (
+                  <Button type="button" variant="ghost" size="sm" onClick={clearGeminiKey} className="text-muted-foreground">
+                    Очистить ключ
                   </Button>
-                </div>
+                )}
+              </div>
+              {hasGeminiKey && (
+                <p className="text-sm text-green-600 dark:text-green-400">✓ Ключ сохранён. Можно ввести другой и нажать «Изменить ключ».</p>
               )}
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-lg font-semibold flex items-center gap-2">
+                Модель
+              </Label>
+              <select
+                value={videoModel}
+                onChange={(e) => setVideoModel(e.target.value)}
+                className="flex h-12 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              >
+                {videoModels.map((m) => (
+                  <option key={m.id} value={m.id}>{m.label} — {m.description}</option>
+                ))}
+              </select>
             </div>
 
             <div className="space-y-2">

@@ -65,6 +65,7 @@ def handler(event: dict, context) -> dict:
             }
 
         style_prompts = {
+            'как_на_картинке': '',  # используется только при has_reference; стиль берётся с образца
             'фотореализм': 'Photorealistic, ultra-detailed, professional photography, high quality',
             'иллюстрация': 'Digital illustration, artistic style, vibrant colors, creative design',
             'мультяшный': 'Cartoon style, animated, colorful, fun character design',
@@ -79,7 +80,8 @@ def handler(event: dict, context) -> dict:
             'граффити': 'Graffiti art style, urban street art, bold spray paint, expressive'
         }
 
-        style_instruction = style_prompts.get(style, '')
+        use_reference_style = (style == 'как_на_картинке')
+        style_instruction = style_prompts.get(style, '') if not use_reference_style else ''
         has_reference = False
         ref_mime = 'image/png'
         ref_b64 = None
@@ -92,8 +94,17 @@ def handler(event: dict, context) -> dict:
             if ref_b64:
                 has_reference = True
         if has_reference:
-            prompt = f"Using the attached reference image as the basis, create: {task}. Style: {style_instruction}. Keep the composition/subject from the reference but apply the new description and style. High quality, detailed."
+            if use_reference_style:
+                prompt = (
+                    "Using the attached reference image as the basis and as the ONLY style reference: "
+                    "preserve the exact same artistic style, lighting, color palette, mood, and visual look of the reference. "
+                    f"Create: {task}. The result must look like it was made in the same style as the reference. High quality, detailed."
+                )
+            else:
+                prompt = f"Using the attached reference image as the basis, create: {task}. Style: {style_instruction}. Keep the composition/subject from the reference but apply the new description and style. High quality, detailed."
         else:
+            if use_reference_style:
+                style_instruction = style_prompts.get('фотореализм', '')
             prompt = f"{task}. Style: {style_instruction}. High quality, detailed."
 
         # Соответствие формата фронта и Gemini (1:1, 16:9, 9:16, 3:2, 4:3, 3:4, 21:9, 4:5, 5:4)

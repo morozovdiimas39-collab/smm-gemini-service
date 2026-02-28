@@ -34,7 +34,7 @@ export default function ImageForAnya() {
   const location = useLocation();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [task, setTask] = useState('');
-  const [style, setStyle] = useState('фотореализм');
+  const [style, setStyle] = useState('как_на_картинке');
   const [aspectRatio, setAspectRatio] = useState('квадрат');
   const [imageModel, setImageModel] = useState<'flash' | 'pro'>('flash');
   const [referenceImage, setReferenceImage] = useState<{ mimeType: string; data: string; preview: string } | null>(null);
@@ -55,6 +55,7 @@ export default function ImageForAnya() {
   }, [location.state, toast]);
 
   const styles = [
+    { value: 'как_на_картинке', label: '🖼️ Как на загруженной картинке', prompt: 'Сохранить стиль, свет и настроение образца' },
     { value: 'фотореализм', label: '📷 Фотореализм', prompt: 'Photorealistic, ultra-detailed, professional photography' },
     { value: 'иллюстрация', label: '🎨 Иллюстрация', prompt: 'Digital illustration, artistic style, vibrant colors' },
     { value: 'мультяшный', label: '🎬 Мультяшный стиль', prompt: 'Cartoon style, animated, colorful, fun' },
@@ -100,6 +101,7 @@ export default function ImageForAnya() {
         data: base64,
         preview: result,
       });
+      setStyle((s) => (s === 'фотореализм' ? 'как_на_картинке' : s));
     };
     reader.readAsDataURL(file);
     e.target.value = '';
