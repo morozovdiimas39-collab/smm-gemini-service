@@ -103,7 +103,7 @@ export default function Index() {
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
             Создавайте идеальные посты для соцсетей с помощью AI
           </p>
-          <div className="flex gap-4 justify-center">
+          <div className="flex flex-wrap gap-4 justify-center">
             <Button variant="default" size="lg" className="font-semibold">
               📝 Текст постов
             </Button>
