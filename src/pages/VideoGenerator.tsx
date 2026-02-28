@@ -7,7 +7,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import Icon from '@/components/ui/icon';
 
-const GENERATE_VIDEO_URL = ''; // Укажите URL облачной функции generate-video после деплоя
+const GENERATE_VIDEO_URL = 'https://functions.yandexcloud.net/d4e3ca3cvftr0nqmnhtg';
 
 const videoAspectRatios = [
   { value: '16:9', label: '◻️ 16:9 Горизонтальный', description: 'YouTube, экран' },
