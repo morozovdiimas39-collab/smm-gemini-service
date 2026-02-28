@@ -105,7 +105,8 @@ export default function VideoGenerator() {
     setIsGenerating(true);
     setVideoUrl('');
 
-    const body: { prompt: string; aspectRatio: string; durationSec: number; referenceImage?: { mimeType: string; data: string } } = {
+    try {
+      const body: { prompt: string; aspectRatio: string; durationSec: number; referenceImage?: { mimeType: string; data: string } } = {
         prompt: prompt.trim(),
         aspectRatio,
         durationSec,
