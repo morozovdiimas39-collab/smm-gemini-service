@@ -81,12 +81,17 @@ def handler(event: dict, context) -> dict:
         style_instruction = style_prompts.get(style, '')
         prompt = f"{task}. Style: {style_instruction}. High quality, detailed."
 
-        # Соответствие формата фронта и Gemini (1:1, 16:9, 9:16, 3:2 и т.д.)
+        # Соответствие формата фронта и Gemini (1:1, 16:9, 9:16, 3:2, 4:3, 3:4, 21:9, 4:5, 5:4)
         aspect_to_gemini = {
             'квадрат': '1:1',
             'горизонтальный': '16:9',
             'вертикальный': '9:16',
             'горизонтальный_широкий': '3:2',
+            '4_3': '4:3',
+            '3_4': '3:4',
+            '21_9': '21:9',
+            '4_5': '4:5',
+            '5_4': '5:4',
         }
         gemini_aspect = aspect_to_gemini.get(aspect_ratio, '1:1')
 

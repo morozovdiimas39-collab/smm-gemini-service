@@ -546,6 +546,11 @@ export default function Documents() {
                 🎨 Изображения
               </Button>
             </Link>
+            <Link to="/video">
+              <Button variant="outline" size="lg" className="font-semibold">
+                🎬 Видео
+              </Button>
+            </Link>
             <Button variant="default" size="lg" className="font-semibold">
               📚 Документы
             </Button>

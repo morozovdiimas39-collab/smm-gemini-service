@@ -71,6 +71,11 @@ export default function ImageGenerator() {
     { value: 'горизонтальный', label: '◻️ Горизонтальный 16:9', size: '1920x1080', description: 'YouTube, Telegram' },
     { value: 'вертикальный', label: '▭ Вертикальный 9:16', size: '1080x1920', description: 'Stories, Reels' },
     { value: 'горизонтальный_широкий', label: '▬ Широкий 3:2', size: '1200x628', description: 'Facebook, VK баннер' },
+    { value: '4_3', label: '▭ 4:3', size: '1440x1080', description: 'Классическое видео' },
+    { value: '3_4', label: '▯ 3:4', size: '1080x1440', description: 'Портрет, Pinterest' },
+    { value: '21_9', label: '▬ 21:9 Широкий', size: '2560x1080', description: 'Кино, ультраширокий' },
+    { value: '4_5', label: '▯ 4:5', size: '1080x1350', description: 'Instagram портрет' },
+    { value: '5_4', label: '▭ 5:4', size: '1350x1080', description: 'Альбомный 5:4' },
   ];
 
   const generateImage = async () => {
@@ -224,6 +229,11 @@ export default function ImageGenerator() {
             <Button variant="default" size="lg" className="font-semibold">
               🎨 Изображения
             </Button>
+            <Link to="/video">
+              <Button variant="outline" size="lg" className="font-semibold">
+                🎬 Видео
+              </Button>
+            </Link>
             <Link to="/documents">
               <Button variant="outline" size="lg" className="font-semibold">
                 📚 Документы
