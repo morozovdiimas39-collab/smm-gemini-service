@@ -115,7 +115,7 @@ export default function VideoGenerator() {
         model: string;
         prompt: string;
         config: { numberOfVideos: number; aspectRatio: string; durationSeconds?: number };
-        image?: { bytesBase64Encoded: string; mimeType: string };
+        image?: { imageBytes: string; mimeType: string };
       } = {
         model: 'veo-3.1-generate-preview',
         prompt: prompt.trim(),
@@ -126,7 +126,7 @@ export default function VideoGenerator() {
         },
       };
       if (referenceImage) {
-        params.image = { bytesBase64Encoded: referenceImage.data, mimeType: referenceImage.mimeType };
+        params.image = { imageBytes: referenceImage.data, mimeType: referenceImage.mimeType };
       }
 
       let operation = await ai.models.generateVideos(params as never);
