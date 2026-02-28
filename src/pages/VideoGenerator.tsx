@@ -16,14 +16,19 @@ const videoAspectRatios = [
 ];
 
 const durations = [
-  { value: 5, label: '5 сек' },
+  { value: 4, label: '4 сек' },
+  { value: 6, label: '6 сек' },
   { value: 8, label: '8 сек' },
 ];
 
-function longFetch(url: string, options: { method?: string; headers?: Record<string, string>; body?: string }): Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }> {
+function longFetch(
+  url: string,
+  options: { method?: string; headers?: Record<string, string>; body?: string; timeout?: number }
+): Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open(options.method || 'GET', url);
+    xhr.timeout = options.timeout ?? 300000; // 5 мин для видео
     if (options.headers) {
       for (const [k, v] of Object.entries(options.headers)) xhr.setRequestHeader(k, v);
     }
@@ -34,8 +39,8 @@ function longFetch(url: string, options: { method?: string; headers?: Record<str
         json: () => Promise.resolve(JSON.parse(xhr.responseText || 'null')),
       });
     };
-    xhr.onerror = () => reject(new TypeError('Failed to fetch'));
-    xhr.ontimeout = () => reject(new TypeError('Failed to fetch'));
+    xhr.onerror = () => reject(new TypeError('Соединение разорвано. Проверьте таймаут функции в Yandex Cloud.'));
+    xhr.ontimeout = () => reject(new TypeError('Превышено время ожидания. Генерация видео занимает 2–5 минут.'));
     xhr.send(options.body ?? undefined);
   });
 }
@@ -78,18 +83,42 @@ export default function VideoGenerator() {
           aspectRatio,
           durationSec,
         }),
+        timeout: 30000,
       });
-      const data = (await res.json()) as { videoUrl?: string; error?: string; message?: string };
+      const data = (await res.json()) as { jobId?: string; videoUrl?: string; error?: string; message?: string };
 
-      if (res.ok && data.videoUrl) {
-        setVideoUrl(data.videoUrl);
-        toast({
-          title: 'Готово! 🎬',
-          description: 'Видео создано',
-        });
-      } else {
+      if (!res.ok) {
         throw new Error(data.error || data.message || 'Не удалось создать видео');
       }
+      if (data.videoUrl) {
+        setVideoUrl(data.videoUrl);
+        toast({ title: 'Готово! 🎬', description: 'Видео создано' });
+        return;
+      }
+      if (!data.jobId) {
+        throw new Error(data.error || 'Нет jobId');
+      }
+
+      const jobId = data.jobId;
+      const pollInterval = 5000;
+      const maxAttempts = 120;
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise((r) => setTimeout(r, pollInterval));
+        const pollRes = await longFetch(`${GENERATE_VIDEO_URL}?jobId=${jobId}`, {
+          method: 'GET',
+          timeout: 10000,
+        });
+        const pollData = (await pollRes.json()) as { status?: string; videoUrl?: string; error?: string };
+        if (pollData.status === 'done' && pollData.videoUrl) {
+          setVideoUrl(pollData.videoUrl);
+          toast({ title: 'Готово! 🎬', description: 'Видео создано' });
+          return;
+        }
+        if (pollData.status === 'error' || pollData.error) {
+          throw new Error(pollData.error || 'Ошибка генерации');
+        }
+      }
+      throw new Error('Превышено время ожидания');
     } catch (e) {
       toast({
         title: 'Ошибка генерации',
@@ -230,12 +259,28 @@ export default function VideoGenerator() {
                 </div>
               )}
               {videoUrl && (
-                <video
-                  src={videoUrl}
-                  controls
-                  className="max-w-full max-h-[70vh] rounded-lg"
-                  playsInline
-                />
+                <div className="space-y-3">
+                  <video
+                    src={videoUrl}
+                    controls
+                    className="max-w-full max-h-[70vh] rounded-lg"
+                    playsInline
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      const a = document.createElement('a');
+                      a.href = videoUrl;
+                      a.download = 'veo-video.mp4';
+                      a.click();
+                    }}
+                    className="flex items-center gap-2"
+                  >
+                    <Icon name="Download" size={18} />
+                    Скачать видео
+                  </Button>
+                </div>
               )}
             </div>
           </Card>

@@ -55,6 +55,7 @@ def handler(event: dict, context) -> dict:
         style = request_data.get('style', 'фотореализм')
         aspect_ratio = request_data.get('aspectRatio', 'квадрат')
         image_model = request_data.get('imageModel', 'flash')  # 'flash' | 'pro'
+        reference_image = request_data.get('referenceImage')  # optional: base64 string or { "mimeType": "...", "data": "..." }
 
         if not task:
             return {
@@ -79,7 +80,21 @@ def handler(event: dict, context) -> dict:
         }
 
         style_instruction = style_prompts.get(style, '')
-        prompt = f"{task}. Style: {style_instruction}. High quality, detailed."
+        has_reference = False
+        ref_mime = 'image/png'
+        ref_b64 = None
+        if reference_image:
+            if isinstance(reference_image, dict):
+                ref_b64 = reference_image.get('data') or reference_image.get('dataBase64')
+                ref_mime = reference_image.get('mimeType') or reference_image.get('mime_type') or 'image/png'
+            elif isinstance(reference_image, str):
+                ref_b64 = reference_image
+            if ref_b64:
+                has_reference = True
+        if has_reference:
+            prompt = f"Using the attached reference image as the basis, create: {task}. Style: {style_instruction}. Keep the composition/subject from the reference but apply the new description and style. High quality, detailed."
+        else:
+            prompt = f"{task}. Style: {style_instruction}. High quality, detailed."
 
         # Соответствие формата фронта и Gemini (1:1, 16:9, 9:16, 3:2, 4:3, 3:4, 21:9, 4:5, 5:4)
         aspect_to_gemini = {
@@ -119,8 +134,12 @@ def handler(event: dict, context) -> dict:
         # aspectRatio по доке: 1:1, 16:9, 9:16, 3:2, 4:3, 3:4, 4:5, 5:4, 21:9
         generation_config['imageConfig'] = {'aspectRatio': gemini_aspect}
 
+        parts = []
+        if has_reference and ref_b64:
+            parts.append({'inlineData': {'mimeType': ref_mime, 'data': ref_b64}})
+        parts.append({'text': prompt})
         gemini_request = {
-            'contents': [{'parts': [{'text': prompt}]}],
+            'contents': [{'parts': parts}],
             'generationConfig': generation_config,
         }
 

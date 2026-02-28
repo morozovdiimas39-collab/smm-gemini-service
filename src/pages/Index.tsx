@@ -112,6 +112,11 @@ export default function Index() {
                 🎨 Изображения
               </Button>
             </Link>
+            <Link to="/images-for-anya">
+              <Button variant="outline" size="lg" className="font-semibold">
+                👗 Образы для Ани
+              </Button>
+            </Link>
             <Link to="/video">
               <Button variant="outline" size="lg" className="font-semibold">
                 🎬 Видео

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -7,7 +7,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import Icon from '@/components/ui/icon';
 
-/** Долгий запрос через XHR, чтобы обойти перехват fetch (telemetry/другие скрипты) с таймаутом ~60 с. */
+const GENERATE_IMAGE_URL = 'https://functions.yandexcloud.net/d4e0l4059mc7lrjj3d3b';
+
 function longFetch(url: string, options: { method?: string; headers?: Record<string, string>; body?: string }): Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -28,25 +29,24 @@ function longFetch(url: string, options: { method?: string; headers?: Record<str
   });
 }
 
-export default function ImageGenerator() {
+export default function ImageForAnya() {
   const { toast } = useToast();
   const location = useLocation();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [task, setTask] = useState('');
   const [style, setStyle] = useState('фотореализм');
   const [aspectRatio, setAspectRatio] = useState('квадрат');
   const [imageModel, setImageModel] = useState<'flash' | 'pro'>('flash');
+  const [referenceImage, setReferenceImage] = useState<{ mimeType: string; data: string; preview: string } | null>(null);
   const [generatedImageUrl, setGeneratedImageUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
-  const [timeoutTestSec, setTimeoutTestSec] = useState(60);
-  const [isTestingTimeout, setIsTestingTimeout] = useState(false);
-  const [timeoutTestResult, setTimeoutTestResult] = useState<string | null>(null);
 
   useEffect(() => {
     if (location.state?.initialPrompt) {
       setTask(location.state.initialPrompt);
       toast({
         title: 'Промпт загружен! ✨',
-        description: 'Описание изображения создано на основе вашего поста',
+        description: 'Описание создано на основе вашего поста',
       });
     }
   }, [location.state, toast]);
@@ -78,11 +78,48 @@ export default function ImageGenerator() {
     { value: '5_4', label: '▭ 5:4', size: '1350x1080', description: 'Альбомный 5:4' },
   ];
 
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !file.type.startsWith('image/')) {
+      toast({
+        title: 'Ошибка',
+        description: 'Выберите файл изображения (PNG, JPEG, WebP)',
+        variant: 'destructive',
+      });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.includes(',') ? result.split(',')[1]! : result;
+      setReferenceImage({
+        mimeType: file.type,
+        data: base64,
+        preview: result,
+      });
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const clearReference = () => {
+    setReferenceImage(null);
+    fileInputRef.current?.value && (fileInputRef.current.value = '');
+  };
+
   const generateImage = async () => {
     if (!task.trim()) {
       toast({
         title: 'Ошибка',
-        description: 'Опишите, какое изображение хотите создать',
+        description: 'Опишите, какое изображение хотите создать на основе картинки',
+        variant: 'destructive',
+      });
+      return;
+    }
+    if (!referenceImage) {
+      toast({
+        title: 'Ошибка',
+        description: 'Загрузите картинку, на основе которой создать образ',
         variant: 'destructive',
       });
       return;
@@ -91,8 +128,13 @@ export default function ImageGenerator() {
     setIsGenerating(true);
     setGeneratedImageUrl('');
 
-    const url = 'https://functions.yandexcloud.net/d4e0l4059mc7lrjj3d3b';
-    const body = JSON.stringify({ task, style, aspectRatio, imageModel });
+    const body = JSON.stringify({
+      task,
+      style,
+      aspectRatio,
+      imageModel,
+      referenceImage: { mimeType: referenceImage.mimeType, data: referenceImage.data },
+    });
     const maxAttempts = 4;
     const retryDelays = [0, 5000, 15000, 25000];
 
@@ -109,7 +151,7 @@ export default function ImageGenerator() {
           await new Promise(r => setTimeout(r, retryDelays[attempt]));
         }
         try {
-          response = await longFetch(url, {
+          response = await longFetch(GENERATE_IMAGE_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body,
@@ -130,7 +172,7 @@ export default function ImageGenerator() {
         setGeneratedImageUrl(data.imageUrl);
         toast({
           title: 'Готово! 🎉',
-          description: 'Изображение успешно создано',
+          description: 'Образ создан на основе вашей картинки',
         });
       } else {
         throw new Error(data.error || 'Не удалось создать изображение');
@@ -140,7 +182,7 @@ export default function ImageGenerator() {
       toast({
         title: 'Ошибка генерации',
         description: isNetworkError
-          ? 'Соединение обрывается. Проверьте интернет или попробуйте позже (генерация до 2 мин).'
+          ? 'Соединение обрывается. Проверьте интернет или попробуйте позже.'
           : (error instanceof Error ? error.message : 'Не удалось создать изображение. Попробуйте еще раз.'),
         variant: 'destructive',
       });
@@ -152,19 +194,17 @@ export default function ImageGenerator() {
 
   const downloadImage = async () => {
     if (!generatedImageUrl) return;
-    
     try {
       const response = await fetch(generatedImageUrl);
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `anyagpt_image_${Date.now()}.png`;
+      a.download = `anyagpt_obraz_${Date.now()}.png`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       window.URL.revokeObjectURL(url);
-      
       toast({
         title: 'Загружено! 💾',
         description: 'Изображение сохранено на устройство',
@@ -178,33 +218,6 @@ export default function ImageGenerator() {
     }
   };
 
-  const runTimeoutTest = async () => {
-    const url = 'https://functions.yandexcloud.net/d4e0l4059mc7lrjj3d3b';
-    setIsTestingTimeout(true);
-    setTimeoutTestResult(null);
-    const start = Date.now();
-    try {
-      const res = await longFetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ testTimeout: timeoutTestSec }),
-      });
-      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-      const data = await res.json();
-      if (data.ok && data.slept_sec != null) {
-        setTimeoutTestResult(`✅ Соединение держалось ${elapsed} с (сервер ждал ${data.slept_sec} с). Лимит не меньше ${timeoutTestSec} с.`);
-      } else {
-        setTimeoutTestResult(`⚠️ Ответ за ${elapsed} с, но без slept_sec: ${JSON.stringify(data)}`);
-      }
-    } catch (e) {
-      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-      setTimeoutTestResult(`❌ Обрыв через ~${elapsed} с при тесте на ${timeoutTestSec} с. Запрос режет что-то до ${timeoutTestSec} с (шлюз, сеть или браузер).`);
-      console.error(e);
-    } finally {
-      setIsTestingTimeout(false);
-    }
-  };
-
   const selectedStyleData = styles.find(s => s.value === style);
   const selectedAspectData = aspectRatios.find(ar => ar.value === aspectRatio);
 
@@ -213,27 +226,27 @@ export default function ImageGenerator() {
       <div className="max-w-6xl mx-auto space-y-8 animate-fade-in">
         <div className="text-center space-y-4">
           <div className="inline-flex items-center gap-3 px-6 py-3 bg-gradient-to-r from-secondary to-accent rounded-full shadow-lg">
-            <span className="text-3xl">🎨</span>
-            <h1 className="text-2xl md:text-3xl font-bold text-white">AnyaGPT Image Generator</h1>
+            <span className="text-3xl">👗</span>
+            <h1 className="text-2xl md:text-3xl font-bold text-white">Образы для Ани</h1>
             <span className="text-3xl">🖼️</span>
           </div>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Создавайте уникальные изображения для соцсетей с помощью Gemini 2.5 Flash Image
+            Загрузите картинку — создадим новый образ на её основе с помощью ИИ
           </p>
-          <div className="flex gap-4 justify-center">
+          <div className="flex gap-4 justify-center flex-wrap">
             <Link to="/">
               <Button variant="outline" size="lg" className="font-semibold">
                 📝 Текст постов
               </Button>
             </Link>
-            <Button variant="default" size="lg" className="font-semibold">
-              🎨 Изображения
-            </Button>
-            <Link to="/images-for-anya">
+            <Link to="/images">
               <Button variant="outline" size="lg" className="font-semibold">
-                👗 Образы для Ани
+                🎨 Изображения
               </Button>
             </Link>
+            <Button variant="default" size="lg" className="font-semibold">
+              👗 Образы для Ани
+            </Button>
             <Link to="/video">
               <Button variant="outline" size="lg" className="font-semibold">
                 🎬 Видео
@@ -251,21 +264,62 @@ export default function ImageGenerator() {
           <Card className="md:col-span-2 p-6 space-y-6 shadow-xl border-2 hover:border-secondary/50 transition-all duration-300">
             <div className="space-y-2">
               <Label className="text-lg font-semibold flex items-center gap-2">
+                <Icon name="Image" size={20} className="text-secondary" />
+                Картинка-образец
+              </Label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={onFileChange}
+                className="hidden"
+              />
+              {!referenceImage ? (
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className="min-h-[140px] border-2 border-dashed border-muted-foreground/30 rounded-lg flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-secondary/50 hover:bg-muted/30 transition-colors"
+                >
+                  <Icon name="Upload" size={40} className="text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">Нажмите или перетащите изображение</span>
+                  <span className="text-xs text-muted-foreground">PNG, JPEG, WebP</span>
+                </div>
+              ) : (
+                <div className="relative rounded-lg overflow-hidden border-2 border-border">
+                  <img
+                    src={referenceImage.preview}
+                    alt="Образец"
+                    className="w-full h-auto max-h-[220px] object-contain bg-muted/30"
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="absolute top-2 right-2"
+                    onClick={clearReference}
+                  >
+                    ✕ Убрать
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-lg font-semibold flex items-center gap-2">
                 <Icon name="Wand2" size={20} className="text-secondary" />
-                Что создать?
+                Что создать на основе картинки?
               </Label>
               <Textarea
                 value={task}
                 onChange={(e) => setTask(e.target.value)}
-                placeholder="Опишите, какое изображение вы хотите получить..."
-                className="min-h-[120px] resize-none"
+                placeholder="Например: тот же человек в вечернем платье, в стиле иллюстрации..."
+                className="min-h-[100px] resize-none"
               />
             </div>
 
             <div className="space-y-2">
               <Label className="text-lg font-semibold flex items-center gap-2">
                 <Icon name="Palette" size={20} className="text-secondary" />
-                Стиль изображения
+                Стиль
               </Label>
               <select
                 value={style}
@@ -277,9 +331,7 @@ export default function ImageGenerator() {
                 ))}
               </select>
               {selectedStyleData && (
-                <p className="text-xs text-muted-foreground italic">
-                  {selectedStyleData.prompt}
-                </p>
+                <p className="text-xs text-muted-foreground italic">{selectedStyleData.prompt}</p>
               )}
             </div>
 
@@ -293,18 +345,15 @@ export default function ImageGenerator() {
                 onChange={(e) => setImageModel(e.target.value as 'flash' | 'pro')}
                 className="flex h-12 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
               >
-                <option value="flash">⚡ Быстрая (Flash) — быстрее, экономнее</option>
-                <option value="pro">✨ Nano Banana — лучше детали</option>
+                <option value="flash">⚡ Быстрая (Flash)</option>
+                <option value="pro">✨ Nano Banana</option>
               </select>
-              <p className="text-xs text-muted-foreground">
-                {imageModel === 'pro' ? 'Nano Banana: выше качество и детализация.' : 'Gemini 2.5 Flash: быстрая генерация.'}
-              </p>
             </div>
 
             <div className="space-y-2">
               <Label className="text-lg font-semibold flex items-center gap-2">
                 <Icon name="Maximize2" size={20} className="text-secondary" />
-                Формат изображения
+                Формат
               </Label>
               <select
                 value={aspectRatio}
@@ -316,63 +365,28 @@ export default function ImageGenerator() {
                 ))}
               </select>
               {selectedAspectData && (
-                <div className="text-xs text-muted-foreground space-y-1">
-                  <p>📐 Размер: {selectedAspectData.size}</p>
-                  <p>📱 Подходит для: {selectedAspectData.description}</p>
-                </div>
+                <p className="text-xs text-muted-foreground">📐 {selectedAspectData.size}</p>
               )}
             </div>
 
             <Button
               onClick={generateImage}
-              disabled={isGenerating}
+              disabled={isGenerating || !referenceImage}
               size="lg"
               className="w-full h-14 text-lg font-bold bg-gradient-to-r from-secondary to-accent hover:opacity-90 transition-all duration-300 shadow-lg hover:shadow-xl"
             >
               {isGenerating ? (
                 <>
                   <Icon name="Loader2" size={24} className="animate-spin mr-2" />
-                  Создаю изображение...
+                  Создаю образ...
                 </>
               ) : (
                 <>
                   <Icon name="Sparkles" size={24} className="mr-2" />
-                  Создать изображение
+                  Создать образ
                 </>
               )}
             </Button>
-
-            <div className="pt-4 border-t border-border space-y-2">
-              <Label className="text-sm font-medium text-muted-foreground">Диагностика таймаута</Label>
-              <p className="text-xs text-muted-foreground">
-                Узнать, через сколько секунд обрывается соединение.
-              </p>
-              <div className="flex gap-2 items-center flex-wrap">
-                <select
-                  value={timeoutTestSec}
-                  onChange={(e) => { setTimeoutTestSec(Number(e.target.value)); setTimeoutTestResult(null); }}
-                  className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
-                >
-                  {[30, 45, 60, 75, 90, 120].map((s) => (
-                    <option key={s} value={s}>{s} с</option>
-                  ))}
-                </select>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={runTimeoutTest}
-                  disabled={isTestingTimeout || isGenerating}
-                >
-                  {isTestingTimeout ? `Ждём ${timeoutTestSec} с...` : 'Проверить'}
-                </Button>
-              </div>
-              {timeoutTestResult && (
-                <p className="text-xs text-muted-foreground bg-muted/50 p-2 rounded break-words">
-                  {timeoutTestResult}
-                </p>
-              )}
-            </div>
           </Card>
 
           <Card className="md:col-span-3 p-6 space-y-4 shadow-xl border-2 hover:border-primary/50 transition-all duration-300">
@@ -382,12 +396,7 @@ export default function ImageGenerator() {
                 Результат
               </Label>
               {generatedImageUrl && (
-                <Button
-                  onClick={downloadImage}
-                  variant="outline"
-                  size="sm"
-                  className="gap-2"
-                >
+                <Button onClick={downloadImage} variant="outline" size="sm" className="gap-2">
                   <Icon name="Download" size={16} />
                   Скачать
                 </Button>
@@ -397,12 +406,12 @@ export default function ImageGenerator() {
             <div className="min-h-[600px] bg-muted/30 rounded-lg p-6 relative flex items-center justify-center">
               {!generatedImageUrl && !isGenerating && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6">
-                  <div className="text-6xl mb-4 animate-bounce">🖼️</div>
+                  <div className="text-6xl mb-4 animate-bounce">👗</div>
                   <p className="text-xl font-semibold text-muted-foreground mb-2">
-                    Ваше изображение появится здесь
+                    Образ появится здесь
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    Опишите желаемое изображение и нажмите "Создать"
+                    Загрузите картинку, опишите желаемый образ и нажмите «Создать образ»
                   </p>
                 </div>
               )}
@@ -411,7 +420,7 @@ export default function ImageGenerator() {
                 <div className="absolute inset-0 flex flex-col items-center justify-center">
                   <Icon name="Sparkles" size={64} className="text-secondary animate-pulse mb-4" />
                   <p className="text-lg font-semibold text-secondary animate-pulse">
-                    Рисую идеальное изображение...
+                    Создаю образ на основе вашей картинки...
                   </p>
                 </div>
               )}
@@ -420,7 +429,7 @@ export default function ImageGenerator() {
                 <div className="w-full h-full flex items-center justify-center animate-fade-in">
                   <img
                     src={generatedImageUrl}
-                    alt="Generated image"
+                    alt="Созданный образ"
                     className="max-w-full max-h-full rounded-lg shadow-2xl object-contain"
                   />
                 </div>
@@ -433,7 +442,7 @@ export default function ImageGenerator() {
           <p className="flex items-center justify-center gap-2">
             Powered by
             <span className="font-semibold bg-gradient-to-r from-secondary to-accent bg-clip-text text-transparent">
-              Gemini 2.5 Flash Image
+              Gemini
             </span>
             ✨
           </p>

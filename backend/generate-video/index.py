@@ -1,171 +1,240 @@
 """
-Генерация видео через Gemini API (Veo 3) — тот же GEMINI_API_KEY, что и для картинок.
-Документация: https://ai.google.dev/gemini-api/docs/video
+Генерация видео через Gemini API (Veo 3) — асинхронный flow (обход 499 Request cancelled).
+POST -> jobId сразу, обработка в фоне. GET ?jobId=xxx -> polling результата.
 """
 
 import json
 import os
+import socket
+import ssl
 import time
+import urllib.parse
 import urllib.request
-import urllib.error
 
 VEO_MODEL = 'veo-3.1-generate-preview'
 POLL_INTERVAL = 10
 MAX_POLL_MINUTES = 10
 
 
+def _get_s3():
+    bucket = os.environ.get('S3_BUCKET')
+    key_id = os.environ.get('S3_ACCESS_KEY')
+    secret = os.environ.get('S3_SECRET_KEY')
+    if not (bucket and key_id and secret):
+        return None, None
+    import boto3
+    s3 = boto3.client(
+        's3',
+        endpoint_url='https://storage.yandexcloud.net',
+        aws_access_key_id=key_id,
+        aws_secret_access_key=secret,
+    )
+    return s3, bucket
+
+
+def _write_status(job_id: str, status: str, video_url: str = None, error: str = None):
+    s3, bucket = _get_s3()
+    if not s3:
+        return
+    data = {'status': status}
+    if video_url:
+        data['videoUrl'] = video_url
+    if error:
+        data['error'] = error
+    s3.put_object(
+        Bucket=bucket,
+        Key=f'veo/jobs/{job_id}/status.json',
+        Body=json.dumps(data).encode(),
+        ContentType='application/json',
+    )
+
+
+def _do_generate(job_id: str, prompt: str, aspect_ratio: str, duration_sec: int):
+    try:
+        api_key = os.environ.get('GEMINI_API_KEY')
+        proxy_url = os.environ.get('PROXY_URL')
+        if not api_key:
+            _write_status(job_id, 'error', error='GEMINI_API_KEY не настроен')
+            return
+
+        from google import genai
+        from google.genai import types
+
+        http_options = None
+        if proxy_url:
+            import httpx
+            http_options = types.HttpOptions(
+                httpx_client=httpx.Client(proxy=proxy_url, follow_redirects=True)
+            )
+        client = genai.Client(api_key=api_key, http_options=http_options)
+
+        config_kw = {'aspect_ratio': aspect_ratio, 'number_of_videos': 1}
+        if duration_sec in (4, 6, 8):
+            config_kw['duration_seconds'] = duration_sec
+        elif duration_sec == 5:
+            config_kw['duration_seconds'] = 6
+        config = types.GenerateVideosConfig(**config_kw)
+
+        operation = client.models.generate_videos(model=VEO_MODEL, prompt=prompt, config=config)
+        deadline = time.time() + MAX_POLL_MINUTES * 60
+
+        while time.time() < deadline:
+            time.sleep(POLL_INTERVAL)
+            operation = client.operations.get(operation)
+            if not operation.done:
+                continue
+            if operation.error:
+                _write_status(job_id, 'error', error=str(operation.error))
+                return
+            resp = operation.response
+            if not resp or not getattr(resp, 'generated_videos', None):
+                _write_status(job_id, 'error', error='В ответе нет видео')
+                return
+            video_ref = resp.generated_videos[0]
+            video_file = getattr(video_ref, 'video', None) or getattr(video_ref, 'video_ref', None)
+            if not video_file:
+                _write_status(job_id, 'error', error='Не удалось извлечь видео')
+                return
+
+            download_url = getattr(video_file, 'uri', None) or getattr(video_file, 'name', None)
+            if download_url:
+                download_url = str(download_url)
+                if not download_url.startswith('http'):
+                    download_url = f'https://generativelanguage.googleapis.com/v1beta/{download_url}'
+                sep = '&' if '?' in download_url else '?'
+                actual_url = f'{download_url}{sep}key={api_key}'
+                if proxy_url:
+                    ph = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
+                    opener = urllib.request.build_opener(ph)
+                    urllib.request.install_opener(opener)
+                with urllib.request.urlopen(actual_url, timeout=120) as r:
+                    data = r.read()
+            else:
+                blob = client.files.download(file=video_file)
+                data = blob.data if hasattr(blob, 'data') else (blob if isinstance(blob, bytes) else None)
+
+            if not data:
+                _write_status(job_id, 'error', error='Не удалось получить видео')
+                return
+
+            s3, bucket = _get_s3()
+            if s3:
+                import uuid
+                key = f'veo/{uuid.uuid4().hex}.mp4'
+                s3.put_object(Bucket=bucket, Key=key, Body=data, ContentType='video/mp4')
+                url = s3.generate_presigned_url('get_object', Params={'Bucket': bucket, 'Key': key}, ExpiresIn=86400)
+                _write_status(job_id, 'done', video_url=url)
+            else:
+                _write_status(job_id, 'error', error='Настройте S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY')
+            return
+
+        _write_status(job_id, 'error', error='Превышено время ожидания')
+    except Exception as e:
+        _write_status(job_id, 'error', error=str(e))
+
+
 def handler(event: dict, context) -> dict:
     method = event.get('httpMethod', 'GET')
+    headers = {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'}
 
     if method == 'OPTIONS':
         return {
             'statusCode': 200,
             'headers': {
                 'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
                 'Access-Control-Allow-Headers': 'Content-Type',
                 'Access-Control-Max-Age': '86400',
             },
             'body': '',
         }
 
+    if method == 'GET':
+        # Polling: ?jobId=xxx
+        params = event.get('queryStringParameters') or {}
+        job_id = params.get('jobId')
+        if not job_id:
+            return {'statusCode': 400, 'headers': headers, 'body': json.dumps({'error': 'Укажите jobId'})}
+        s3, bucket = _get_s3()
+        if not s3:
+            return {'statusCode': 500, 'headers': headers, 'body': json.dumps({'error': 'S3 не настроен'})}
+        try:
+            r = s3.get_object(Bucket=bucket, Key=f'veo/jobs/{job_id}/status.json')
+            data = json.loads(r['Body'].read().decode())
+            return {'statusCode': 200, 'headers': headers, 'body': json.dumps(data)}
+        except Exception as e:
+            err_str = str(e).lower()
+            if 'nosuchkey' in err_str or '404' in err_str or 'not found' in err_str:
+                return {'statusCode': 200, 'headers': headers, 'body': json.dumps({'status': 'processing'})}
+            return {'statusCode': 500, 'headers': headers, 'body': json.dumps({'error': str(e)})}
+
     if method != 'POST':
-        return {
-            'statusCode': 405,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': 'Method not allowed'}),
-        }
+        return {'statusCode': 405, 'headers': headers, 'body': json.dumps({'error': 'Method not allowed'})}
 
     try:
         body_str = event.get('body', '{}')
         data = json.loads(body_str)
+
+        if data.get('_worker'):
+            job_id = data.get('jobId')
+            prompt = data.get('prompt', '').strip()
+            aspect_ratio = data.get('aspectRatio', '16:9')
+            duration_sec = int(data.get('durationSec', 8))
+            if job_id and prompt:
+                _do_generate(job_id, prompt, aspect_ratio, duration_sec)
+            return {'statusCode': 200, 'headers': headers, 'body': json.dumps({'ok': True})}
+
         prompt = data.get('prompt', '').strip()
         aspect_ratio = data.get('aspectRatio', '16:9')
-        duration_sec = data.get('durationSec', 8)
+        duration_sec = int(data.get('durationSec', 8))
 
         if not prompt:
-            return {
-                'statusCode': 400,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Укажите описание видео (prompt)'}),
-            }
+            return {'statusCode': 400, 'headers': headers, 'body': json.dumps({'error': 'Укажите описание видео (prompt)'})}
 
-        api_key = os.environ.get('GEMINI_API_KEY')
-        proxy_url = os.environ.get('PROXY_URL')
+        s3, bucket = _get_s3()
+        if not s3:
+            return {'statusCode': 500, 'headers': headers, 'body': json.dumps({'error': 'Настройте S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY'})}
 
-        if not api_key:
-            return {
-                'statusCode': 500,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'GEMINI_API_KEY не настроен'}),
-            }
-
-        if proxy_url:
-            proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
-            opener = urllib.request.build_opener(proxy_handler)
-            urllib.request.install_opener(opener)
-
-        # Gemini API: generateVideos (асинхронная операция)
-        base_url = f'https://generativelanguage.googleapis.com/v1beta/models/{VEO_MODEL}:generateVideos?key={api_key}'
-        request_body = {
-            'prompt': {'text': prompt},
-            'aspectRatio': aspect_ratio,
-            'numberOfVideos': 1,
-        }
-        if duration_sec in (5, 6, 8):
-            request_body['durationSeconds'] = duration_sec
-
-        req = urllib.request.Request(
-            base_url,
-            data=json.dumps(request_body).encode('utf-8'),
-            headers={'Content-Type': 'application/json'},
+        import uuid
+        job_id = uuid.uuid4().hex
+        s3.put_object(
+            Bucket=bucket,
+            Key=f'veo/jobs/{job_id}/input.json',
+            Body=json.dumps({'prompt': prompt, 'aspectRatio': aspect_ratio, 'durationSec': duration_sec}).encode(),
+            ContentType='application/json',
         )
 
+        fn_url = os.environ.get('FUNCTION_URL', 'https://functions.yandexcloud.net/d4e3ca3cvftr0nqmnhtg')
+        worker_body = json.dumps({
+            '_worker': True,
+            'jobId': job_id,
+            'prompt': prompt,
+            'aspectRatio': aspect_ratio,
+            'durationSec': duration_sec,
+        })
+        parsed = urllib.parse.urlparse(fn_url)
+        host = parsed.hostname or 'functions.yandexcloud.net'
+        path = parsed.path or '/'
+        if parsed.query:
+            path += '?' + parsed.query
+        body_bytes = worker_body.encode()
+        req = (
+            f'POST {path} HTTP/1.1\r\n'
+            f'Host: {host}\r\n'
+            f'Content-Type: application/json\r\n'
+            f'Content-Length: {len(body_bytes)}\r\n'
+            f'Connection: close\r\n\r\n'
+        ).encode() + body_bytes
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                op_data = json.loads(resp.read().decode('utf-8'))
-        except urllib.error.HTTPError as e:
-            body = e.read().decode('utf-8') if e.fp else str(e)
-            return {
-                'statusCode': 500,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': f'Veo API: {e.code}', 'details': body[:500]}),
-            }
+            sock = socket.create_connection((host, 443), timeout=10)
+            ctx = ssl.create_default_context()
+            ssock = ctx.wrap_socket(sock, server_hostname=host)
+            ssock.sendall(req)
+            ssock.close()
+        except Exception:
+            pass
 
-        op_name = op_data.get('name')
-        if not op_name:
-            return {
-                'statusCode': 500,
-                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                'body': json.dumps({'error': 'Нет operation name в ответе', 'details': op_data}),
-            }
+        return {'statusCode': 200, 'headers': headers, 'body': json.dumps({'jobId': job_id})}
 
-        # Операции в Gemini API: полный URL для polling
-        if op_name.startswith('operations/'):
-            op_id = op_name
-        else:
-            op_id = op_name
-        op_url = f'https://generativelanguage.googleapis.com/v1beta/{op_id}?key={api_key}'
-
-        deadline = time.time() + MAX_POLL_MINUTES * 60
-        while time.time() < deadline:
-            time.sleep(POLL_INTERVAL)
-            req_op = urllib.request.Request(op_url)
-            with urllib.request.urlopen(req_op, timeout=30) as op_resp:
-                op_status = json.loads(op_resp.read().decode('utf-8'))
-
-            if op_status.get('done'):
-                response = op_status.get('response', {})
-                generated = response.get('generatedVideos') or response.get('generated_videos') or []
-                if not generated:
-                    return {
-                        'statusCode': 500,
-                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                        'body': json.dumps({'error': 'В ответе нет видео', 'response': response}),
-                    }
-                video_ref = generated[0]
-                video = video_ref.get('video') or video_ref.get('videoRef') or video_ref
-                if isinstance(video, dict):
-                    video_uri = video.get('uri') or video.get('fileData', {}).get('fileUri')
-                else:
-                    video_uri = None
-                if not video_uri and isinstance(video, str):
-                    video_uri = video
-                if video_uri:
-                    return {
-                        'statusCode': 200,
-                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                        'body': json.dumps({'videoUrl': video_uri, 'prompt': prompt[:100]}),
-                    }
-                return {
-                    'statusCode': 500,
-                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                    'body': json.dumps({'error': 'Не удалось извлечь URL видео', 'generated': generated}),
-                }
-
-            if op_status.get('error'):
-                return {
-                    'statusCode': 500,
-                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                    'body': json.dumps({'error': op_status['error'].get('message', 'Veo error')}),
-                }
-
-        return {
-            'statusCode': 504,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': 'Превышено время ожидания генерации видео'}),
-        }
-
-    except urllib.error.HTTPError as e:
-        body = e.read().decode('utf-8') if e.fp else ''
-        return {
-            'statusCode': 500,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e.code), 'details': body[:500]}),
-        }
     except Exception as e:
-        return {
-            'statusCode': 500,
-            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': str(e)}),
-        }
+        return {'statusCode': 500, 'headers': headers, 'body': json.dumps({'error': str(e)})}
