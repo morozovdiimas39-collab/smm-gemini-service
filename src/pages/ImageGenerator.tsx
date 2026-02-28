@@ -7,6 +7,27 @@ import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import Icon from '@/components/ui/icon';
 
+/** Долгий запрос через XHR, чтобы обойти перехват fetch (telemetry/другие скрипты) с таймаутом ~60 с. */
+function longFetch(url: string, options: { method?: string; headers?: Record<string, string>; body?: string }): Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(options.method || 'GET', url);
+    if (options.headers) {
+      for (const [k, v] of Object.entries(options.headers)) xhr.setRequestHeader(k, v);
+    }
+    xhr.onload = () => {
+      resolve({
+        ok: xhr.status >= 200 && xhr.status < 300,
+        status: xhr.status,
+        json: () => Promise.resolve(JSON.parse(xhr.responseText || 'null')),
+      });
+    };
+    xhr.onerror = () => reject(new TypeError('Failed to fetch'));
+    xhr.ontimeout = () => reject(new TypeError('Failed to fetch'));
+    xhr.send(options.body ?? undefined);
+  });
+}
+
 export default function ImageGenerator() {
   const { toast } = useToast();
   const location = useLocation();
@@ -16,6 +37,9 @@ export default function ImageGenerator() {
   const [imageModel, setImageModel] = useState<'flash' | 'pro'>('flash');
   const [generatedImageUrl, setGeneratedImageUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [timeoutTestSec, setTimeoutTestSec] = useState(60);
+  const [isTestingTimeout, setIsTestingTimeout] = useState(false);
+  const [timeoutTestResult, setTimeoutTestResult] = useState<string | null>(null);
 
   useEffect(() => {
     if (location.state?.initialPrompt) {
@@ -62,22 +86,41 @@ export default function ImageGenerator() {
     setIsGenerating(true);
     setGeneratedImageUrl('');
 
-    try {
-      const response = await fetch('https://functions.yandexcloud.net/d4e0l4059mc7lrjj3d3b', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          task,
-          style,
-          aspectRatio,
-          imageModel
-        }),
-      });
+    const url = 'https://functions.yandexcloud.net/d4e014059mc7lrjj3d3b';
+    const body = JSON.stringify({ task, style, aspectRatio, imageModel });
+    const maxAttempts = 4;
+    const retryDelays = [0, 5000, 15000, 25000];
 
-      const data = await response.json();
-      
+    try {
+      let response: { ok: boolean; status: number; json: () => Promise<unknown> } | null = null;
+      let lastError: unknown = null;
+
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        if (retryDelays[attempt] > 0) {
+          toast({
+            title: `Повторная попытка ${attempt + 1}/${maxAttempts}`,
+            description: 'Соединение оборвалось, пробуем снова...',
+          });
+          await new Promise(r => setTimeout(r, retryDelays[attempt]));
+        }
+        try {
+          response = await longFetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body,
+          });
+          if (response.ok || response.status < 500) break;
+          if (attempt < maxAttempts - 1) await new Promise(r => setTimeout(r, 3000));
+        } catch (e) {
+          lastError = e;
+          if (attempt === maxAttempts - 1) throw e;
+        }
+      }
+
+      if (!response) throw lastError ?? new Error('Failed to fetch');
+
+      const data = (await response.json()) as { imageUrl?: string; error?: string };
+
       if (response.ok && data.imageUrl) {
         setGeneratedImageUrl(data.imageUrl);
         toast({
@@ -88,9 +131,12 @@ export default function ImageGenerator() {
         throw new Error(data.error || 'Не удалось создать изображение');
       }
     } catch (error) {
+      const isNetworkError = error instanceof TypeError && (error.message === 'Failed to fetch' || (error as Error).message?.includes('fetch'));
       toast({
         title: 'Ошибка генерации',
-        description: 'Не удалось создать изображение. Попробуйте еще раз.',
+        description: isNetworkError
+          ? 'Соединение обрывается. Проверьте интернет или попробуйте позже (генерация до 2 мин).'
+          : (error instanceof Error ? error.message : 'Не удалось создать изображение. Попробуйте еще раз.'),
         variant: 'destructive',
       });
       console.error(error);
@@ -124,6 +170,33 @@ export default function ImageGenerator() {
         description: 'Не удалось загрузить изображение',
         variant: 'destructive',
       });
+    }
+  };
+
+  const runTimeoutTest = async () => {
+    const url = 'https://functions.yandexcloud.net/d4e014059mc7lrjj3d3b';
+    setIsTestingTimeout(true);
+    setTimeoutTestResult(null);
+    const start = Date.now();
+    try {
+      const res = await longFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ testTimeout: timeoutTestSec }),
+      });
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      const data = await res.json();
+      if (data.ok && data.slept_sec != null) {
+        setTimeoutTestResult(`✅ Соединение держалось ${elapsed} с (сервер ждал ${data.slept_sec} с). Лимит не меньше ${timeoutTestSec} с.`);
+      } else {
+        setTimeoutTestResult(`⚠️ Ответ за ${elapsed} с, но без slept_sec: ${JSON.stringify(data)}`);
+      }
+    } catch (e) {
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      setTimeoutTestResult(`❌ Обрыв через ~${elapsed} с при тесте на ${timeoutTestSec} с. Запрос режет что-то до ${timeoutTestSec} с (шлюз, сеть или браузер).`);
+      console.error(e);
+    } finally {
+      setIsTestingTimeout(false);
     }
   };
 
@@ -206,10 +279,10 @@ export default function ImageGenerator() {
                 className="flex h-12 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
               >
                 <option value="flash">⚡ Быстрая (Flash) — быстрее, экономнее</option>
-                <option value="pro">✨ Качество (Pro) — лучше детали, ~12₽/картинка</option>
+                <option value="pro">✨ Nano Banana — лучше детали</option>
               </select>
               <p className="text-xs text-muted-foreground">
-                {imageModel === 'pro' ? 'Nano Banana Pro: выше качество и детализация.' : 'Gemini 2.5 Flash: быстрая генерация.'}
+                {imageModel === 'pro' ? 'Nano Banana: выше качество и детализация.' : 'Gemini 2.5 Flash: быстрая генерация.'}
               </p>
             </div>
 
@@ -253,6 +326,38 @@ export default function ImageGenerator() {
                 </>
               )}
             </Button>
+
+            <div className="pt-4 border-t border-border space-y-2">
+              <Label className="text-sm font-medium text-muted-foreground">Диагностика таймаута</Label>
+              <p className="text-xs text-muted-foreground">
+                Узнать, через сколько секунд обрывается соединение.
+              </p>
+              <div className="flex gap-2 items-center flex-wrap">
+                <select
+                  value={timeoutTestSec}
+                  onChange={(e) => { setTimeoutTestSec(Number(e.target.value)); setTimeoutTestResult(null); }}
+                  className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
+                >
+                  {[30, 45, 60, 75, 90, 120].map((s) => (
+                    <option key={s} value={s}>{s} с</option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={runTimeoutTest}
+                  disabled={isTestingTimeout || isGenerating}
+                >
+                  {isTestingTimeout ? `Ждём ${timeoutTestSec} с...` : 'Проверить'}
+                </Button>
+              </div>
+              {timeoutTestResult && (
+                <p className="text-xs text-muted-foreground bg-muted/50 p-2 rounded break-words">
+                  {timeoutTestResult}
+                </p>
+              )}
+            </div>
           </Card>
 
           <Card className="md:col-span-3 p-6 space-y-4 shadow-xl border-2 hover:border-primary/50 transition-all duration-300">

@@ -1,8 +1,13 @@
 import json
 import os
+import time
 import urllib.request
 import urllib.error
 import base64
+
+MAX_RETRIES = 3
+RETRY_DELAY_SEC = 4
+RETRY_CODES = (503, 429, 500)
 
 def handler(event: dict, context) -> dict:
     '''Генерация изображений через Gemini (gemini-2.5-flash-image)'''
@@ -28,9 +33,23 @@ def handler(event: dict, context) -> dict:
             'body': json.dumps({'error': 'Method not allowed'})
         }
 
+    t0 = time.time()
+
     try:
         body_str = event.get('body', '{}')
         request_data = json.loads(body_str)
+
+        # Режим отладки таймаута: запрос с testTimeout=65 ждёт 65 сек и возвращает OK. Нужно понять, на какой секунде рвётся соединение.
+        test_timeout = request_data.get('testTimeout')
+        if isinstance(test_timeout, (int, float)) and 10 <= test_timeout <= 180:
+            print(f'[generate_image] testTimeout={test_timeout}s sleeping...')
+            time.sleep(test_timeout)
+            print(f'[generate_image] testTimeout done, returning after {time.time() - t0:.1f}s')
+            return {
+                'statusCode': 200,
+                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'body': json.dumps({'ok': True, 'slept_sec': test_timeout, 'total_sec': round(time.time() - t0, 1)})
+            }
 
         task = request_data.get('task', '')
         style = request_data.get('style', 'фотореализм')
@@ -62,6 +81,15 @@ def handler(event: dict, context) -> dict:
         style_instruction = style_prompts.get(style, '')
         prompt = f"{task}. Style: {style_instruction}. High quality, detailed."
 
+        # Соответствие формата фронта и Gemini (1:1, 16:9, 9:16, 3:2 и т.д.)
+        aspect_to_gemini = {
+            'квадрат': '1:1',
+            'горизонтальный': '16:9',
+            'вертикальный': '9:16',
+            'горизонтальный_широкий': '3:2',
+        }
+        gemini_aspect = aspect_to_gemini.get(aspect_ratio, '1:1')
+
         api_key = os.environ.get('GEMINI_API_KEY')
         proxy_url = os.environ.get('PROXY_URL')
 
@@ -72,15 +100,23 @@ def handler(event: dict, context) -> dict:
                 'body': json.dumps({'error': 'GEMINI_API_KEY не настроен'})
             }
 
-        # Модель: Flash (быстро, дёшево) или Pro / Nano Banana Pro (качество, дороже)
+        # Flash — gemini-2.5-flash-image; Nano Banana Pro — gemini-3-pro-image-preview
         model_id = 'gemini-3-pro-image-preview' if image_model == 'pro' else 'gemini-2.5-flash-image'
+        print(f'[generate_image] started model={model_id}')
+
         gemini_url = f'https://generativelanguage.googleapis.com/v1beta/models/{model_id}:generateContent?key={api_key}'
+
+        # Формат по доке: https://ai.google.dev/gemini-api/docs/image-generation
+        # responseModalities TEXT+IMAGE; imageConfig.aspectRatio — для Nano Banana / Gemini image
+        generation_config = {
+            'responseModalities': ['TEXT', 'IMAGE'],
+        }
+        # aspectRatio по доке: 1:1, 16:9, 9:16, 3:2, 4:3, 3:4, 4:5, 5:4, 21:9
+        generation_config['imageConfig'] = {'aspectRatio': gemini_aspect}
 
         gemini_request = {
             'contents': [{'parts': [{'text': prompt}]}],
-            'generationConfig': {
-                'responseModalities': ['TEXT', 'IMAGE']
-            }
+            'generationConfig': generation_config,
         }
 
         req = urllib.request.Request(
@@ -94,8 +130,23 @@ def handler(event: dict, context) -> dict:
             opener = urllib.request.build_opener(proxy_handler)
             urllib.request.install_opener(opener)
 
-        with urllib.request.urlopen(req, timeout=120) as response:
-            gemini_response = json.loads(response.read().decode('utf-8'))
+        last_error = None
+        t_gemini_start = time.time()
+        for attempt in range(MAX_RETRIES):
+            try:
+                print(f'[generate_image] calling_gemini attempt={attempt + 1}')
+                with urllib.request.urlopen(req, timeout=120) as response:
+                    gemini_response = json.loads(response.read().decode('utf-8'))
+                break
+            except urllib.error.HTTPError as e:
+                last_error = e
+                if e.code in RETRY_CODES and attempt < MAX_RETRIES - 1:
+                    time.sleep(RETRY_DELAY_SEC * (attempt + 1))
+                    continue
+                raise
+
+        gemini_elapsed = round(time.time() - t_gemini_start, 1)
+        print(f'[generate_image] gemini_elapsed_sec={gemini_elapsed}')
 
         # Достаём изображение из ответа (inlineData в parts)
         if 'candidates' not in gemini_response or not gemini_response['candidates']:
@@ -140,13 +191,16 @@ def handler(event: dict, context) -> dict:
 
         # Фронт ожидает imageUrl — отдаём data URL
         image_url = f"data:{mime_type};base64,{image_b64}"
+        total_elapsed = round(time.time() - t0, 1)
+        print(f'[generate_image] returning_response total_sec={total_elapsed} gemini_sec={gemini_elapsed}')
 
         return {
             'statusCode': 200,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
             'body': json.dumps({
                 'imageUrl': image_url,
-                'prompt': prompt
+                'prompt': prompt,
+                'debug': {'total_sec': total_elapsed, 'gemini_sec': gemini_elapsed}
             })
         }
 
@@ -155,10 +209,27 @@ def handler(event: dict, context) -> dict:
             error_body = e.read().decode('utf-8') if e.fp else str(e)
         except Exception:
             error_body = str(e)
+        user_message = None
+        if error_body:
+            try:
+                err = json.loads(error_body)
+                if err.get('error', {}).get('status') == 'UNAVAILABLE' or err.get('error', {}).get('code') == 503:
+                    user_message = 'Модель перегружена. Обычно это ненадолго — попробуйте через минуту.'
+                elif err.get('error', {}).get('message'):
+                    user_message = err['error']['message'][:200]
+            except Exception:
+                pass
+        if not user_message:
+            if e.code == 503:
+                user_message = 'Сервис Gemini временно недоступен. Попробуйте через минуту.'
+            elif e.code == 429:
+                user_message = 'Слишком много запросов. Подождите немного и попробуйте снова.'
+            else:
+                user_message = f'Gemini API error: {e.code}'
         return {
             'statusCode': 500,
             'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-            'body': json.dumps({'error': f'Gemini API error: {e.code}', 'details': error_body})
+            'body': json.dumps({'error': user_message})
         }
 
     except Exception as e:
