@@ -28,7 +28,7 @@ function longFetch(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open(options.method || 'GET', url);
-    xhr.timeout = options.timeout ?? 300000; // 5 мин для видео
+    xhr.timeout = options.timeout ?? 360000; // 6 мин — генерация синхронная
     if (options.headers) {
       for (const [k, v] of Object.entries(options.headers)) xhr.setRequestHeader(k, v);
     }
@@ -54,6 +54,8 @@ export default function VideoGenerator() {
   const [referenceImage, setReferenceImage] = useState<{ mimeType: string; data: string; preview: string } | null>(null);
   const [videoUrl, setVideoUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generatingElapsedSec, setGeneratingElapsedSec] = useState(0);
+  const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -104,6 +106,10 @@ export default function VideoGenerator() {
 
     setIsGenerating(true);
     setVideoUrl('');
+    setGeneratingElapsedSec(0);
+    elapsedIntervalRef.current = setInterval(() => {
+      setGeneratingElapsedSec((s) => s + 1);
+    }, 1000);
 
     try {
       const body: { prompt: string; aspectRatio: string; durationSec: number; referenceImage?: { mimeType: string; data: string } } = {
@@ -119,9 +125,9 @@ export default function VideoGenerator() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-        timeout: 30000,
+        timeout: 360000,
       });
-      const data = (await res.json()) as { jobId?: string; videoUrl?: string; error?: string; message?: string };
+      const data = (await res.json()) as { videoUrl?: string; error?: string; message?: string };
 
       if (!res.ok) {
         throw new Error(data.error || data.message || 'Не удалось создать видео');
@@ -129,32 +135,9 @@ export default function VideoGenerator() {
       if (data.videoUrl) {
         setVideoUrl(data.videoUrl);
         toast({ title: 'Готово! 🎬', description: 'Видео создано' });
-        return;
+      } else {
+        throw new Error(data.error || 'Нет видео в ответе');
       }
-      if (!data.jobId) {
-        throw new Error(data.error || 'Нет jobId');
-      }
-
-      const jobId = data.jobId;
-      const pollInterval = 5000;
-      const maxAttempts = 120;
-      for (let i = 0; i < maxAttempts; i++) {
-        await new Promise((r) => setTimeout(r, pollInterval));
-        const pollRes = await longFetch(`${GENERATE_VIDEO_URL}?jobId=${jobId}`, {
-          method: 'GET',
-          timeout: 10000,
-        });
-        const pollData = (await pollRes.json()) as { status?: string; videoUrl?: string; error?: string };
-        if (pollData.status === 'done' && pollData.videoUrl) {
-          setVideoUrl(pollData.videoUrl);
-          toast({ title: 'Готово! 🎬', description: 'Видео создано' });
-          return;
-        }
-        if (pollData.status === 'error' || pollData.error) {
-          throw new Error(pollData.error || 'Ошибка генерации');
-        }
-      }
-      throw new Error('Превышено время ожидания');
     } catch (e) {
       toast({
         title: 'Ошибка генерации',
@@ -163,6 +146,11 @@ export default function VideoGenerator() {
       });
       console.error(e);
     } finally {
+      if (elapsedIntervalRef.current) {
+        clearInterval(elapsedIntervalRef.current);
+        elapsedIntervalRef.current = null;
+      }
+      setGeneratingElapsedSec(0);
       setIsGenerating(false);
     }
   };
@@ -346,7 +334,8 @@ export default function VideoGenerator() {
               {isGenerating && (
                 <div className="flex flex-col items-center gap-4">
                   <Icon name="Loader2" size={48} className="animate-spin text-secondary" />
-                  <p className="text-secondary font-medium">Генерация видео может занять 1–3 минуты...</p>
+                  <p className="text-secondary font-medium">Генерация видео обычно занимает 1–3 минуты</p>
+                  <p className="text-sm text-muted-foreground">Прошло {generatingElapsedSec} сек</p>
                 </div>
               )}
               {videoUrl && (
