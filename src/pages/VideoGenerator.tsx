@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -47,11 +47,42 @@ function longFetch(
 
 export default function VideoGenerator() {
   const { toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [prompt, setPrompt] = useState('');
   const [aspectRatio, setAspectRatio] = useState('16:9');
   const [durationSec, setDurationSec] = useState(8);
+  const [referenceImage, setReferenceImage] = useState<{ mimeType: string; data: string; preview: string } | null>(null);
   const [videoUrl, setVideoUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !file.type.startsWith('image/')) {
+      toast({
+        title: 'Ошибка',
+        description: 'Выберите файл изображения (PNG, JPEG, WebP)',
+        variant: 'destructive',
+      });
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.includes(',') ? result.split(',')[1]! : result;
+      setReferenceImage({
+        mimeType: file.type,
+        data: base64,
+        preview: result,
+      });
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const clearReference = () => {
+    setReferenceImage(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   const generateVideo = async () => {
     if (!prompt.trim()) {
@@ -74,15 +105,19 @@ export default function VideoGenerator() {
     setIsGenerating(true);
     setVideoUrl('');
 
-    try {
+    const body: { prompt: string; aspectRatio: string; durationSec: number; referenceImage?: { mimeType: string; data: string } } = {
+        prompt: prompt.trim(),
+        aspectRatio,
+        durationSec,
+      };
+      if (referenceImage) {
+        body.referenceImage = { mimeType: referenceImage.mimeType, data: referenceImage.data };
+      }
+
       const res = await longFetch(GENERATE_VIDEO_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: prompt.trim(),
-          aspectRatio,
-          durationSec,
-        }),
+        body: JSON.stringify(body),
         timeout: 30000,
       });
       const data = (await res.json()) as { jobId?: string; videoUrl?: string; error?: string; message?: string };
@@ -154,6 +189,11 @@ export default function VideoGenerator() {
                 🎨 Изображения
               </Button>
             </Link>
+            <Link to="/images-for-anya">
+              <Button variant="outline" size="lg" className="font-semibold">
+                👗 Образы для Ани
+              </Button>
+            </Link>
             <Button variant="default" size="lg" className="font-semibold">
               🎬 Видео
             </Button>
@@ -167,6 +207,52 @@ export default function VideoGenerator() {
 
         <div className="grid md:grid-cols-5 gap-6">
           <Card className="md:col-span-2 p-6 space-y-6 shadow-xl border-2 hover:border-secondary/50 transition-all duration-300">
+            <div className="space-y-2">
+              <Label className="text-lg font-semibold flex items-center gap-2">
+                <Icon name="Image" size={20} className="text-secondary" />
+                Картинка-образец (опционально)
+              </Label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                onChange={onFileChange}
+                className="hidden"
+              />
+              {!referenceImage ? (
+                <div
+                  onClick={() => fileInputRef.current?.click()}
+                  className="min-h-[100px] border-2 border-dashed border-muted-foreground/30 rounded-lg flex flex-col items-center justify-center gap-2 cursor-pointer hover:border-secondary/50 hover:bg-muted/30 transition-colors"
+                >
+                  <Icon name="Upload" size={32} className="text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">Добавить изображение для видео по кадру</span>
+                  <span className="text-xs text-muted-foreground">PNG, JPEG, WebP</span>
+                </div>
+              ) : (
+                <div className="relative rounded-lg overflow-hidden border-2 border-border">
+                  <img
+                    src={referenceImage.preview}
+                    alt="Образец"
+                    className="w-full h-auto max-h-[180px] object-contain bg-muted/30"
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="absolute top-2 right-2"
+                    onClick={clearReference}
+                  >
+                    ✕ Убрать
+                  </Button>
+                </div>
+              )}
+              {referenceImage && (
+                <p className="text-xs text-muted-foreground">
+                  Видео будет создано на основе этого кадра. Длительность при этом — 8 сек.
+                </p>
+              )}
+            </div>
+
             <div className="space-y-2">
               <Label className="text-lg font-semibold flex items-center gap-2">
                 <Icon name="Wand2" size={20} className="text-secondary" />
@@ -205,14 +291,18 @@ export default function VideoGenerator() {
                 Длительность
               </Label>
               <select
-                value={durationSec}
+                value={referenceImage ? 8 : durationSec}
                 onChange={(e) => setDurationSec(Number(e.target.value))}
-                className="flex h-12 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                disabled={!!referenceImage}
+                className="flex h-12 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-70"
               >
                 {durations.map((d) => (
                   <option key={d.value} value={d.value}>{d.label}</option>
                 ))}
               </select>
+              {referenceImage && (
+                <p className="text-xs text-muted-foreground">Для видео по картинке доступна только 8 сек.</p>
+              )}
             </div>
 
             <Button
