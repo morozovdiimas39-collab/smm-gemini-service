@@ -91,7 +91,7 @@ export default function ImageGenerator() {
     setIsGenerating(true);
     setGeneratedImageUrl('');
 
-    const url = 'https://functions.yandexcloud.net/d4e014059mc7lrjj3d3b';
+    const url = 'https://functions.yandexcloud.net/d4e0l4059mc7lrjj3d3b';
     const body = JSON.stringify({ task, style, aspectRatio, imageModel });
     const maxAttempts = 4;
     const retryDelays = [0, 5000, 15000, 25000];
@@ -179,7 +179,7 @@ export default function ImageGenerator() {
   };
 
   const runTimeoutTest = async () => {
-    const url = 'https://functions.yandexcloud.net/d4e014059mc7lrjj3d3b';
+    const url = 'https://functions.yandexcloud.net/d4e0l4059mc7lrjj3d3b';
     setIsTestingTimeout(true);
     setTimeoutTestResult(null);
     const start = Date.now();
