@@ -1,6 +1,6 @@
 """
-Генерация видео через Gemini API (Veo 3). Синхронный режим: POST ждёт окончания (2–5 мин) и возвращает videoUrl.
-GET ?jobId=xxx — polling для обратной совместимости (если вернётся jobId).
+Генерация видео через Gemini API (Veo 3). Асинхронно: POST сразу возвращает jobId, воркер вызывается вторым HTTP-запросом.
+Клиент опрашивает GET ?jobId=xxx. Так шлюз не режет долгий ответ.
 """
 
 import base64
@@ -83,14 +83,8 @@ def _do_generate(job_id: str, prompt: str, aspect_ratio: str, duration_sec: int,
             if isinstance(ref_b64, str) and ref_b64:
                 try:
                     image_bytes = base64.b64decode(ref_b64)
-                    from io import BytesIO
-                    # Veo принимает image через URI; загружаем в Files API
-                    f = client.files.upload(file=BytesIO(image_bytes), config={'mime_type': ref_mime})
-                    uri = getattr(f, 'uri', None) or getattr(f, 'name', None)
-                    if uri and hasattr(types, 'Image'):
-                        image_param = types.Image(file_uri=uri, mime_type=ref_mime)
-                    elif uri and hasattr(types, 'VideoGenerationReferenceImage'):
-                        image_param = types.VideoGenerationReferenceImage(file_uri=uri, mime_type=ref_mime)
+                    if hasattr(types, 'Image'):
+                        image_param = types.Image(image_bytes=image_bytes, mime_type=ref_mime)
                 except Exception as e:
                     _write_status(job_id, 'error', error=f'Неверный формат изображения: {e}')
                     return
@@ -200,10 +194,31 @@ def handler(event: dict, context) -> dict:
         body_str = event.get('body', '{}')
         data = json.loads(body_str)
 
+        if data.get('_worker'):
+            job_id = data.get('jobId')
+            if not job_id:
+                return {'statusCode': 400, 'headers': headers, 'body': json.dumps({'error': 'Нет jobId'})}
+            s3, bucket = _get_s3()
+            if not s3:
+                return {'statusCode': 500, 'headers': headers, 'body': json.dumps({'error': 'S3 не настроен'})}
+            try:
+                r = s3.get_object(Bucket=bucket, Key=f'veo/jobs/{job_id}/input.json')
+                input_data = json.loads(r['Body'].read().decode())
+            except Exception as e:
+                return {'statusCode': 500, 'headers': headers, 'body': json.dumps({'error': f'Не прочитать задачу: {e}'})}
+            prompt = (input_data.get('prompt') or '').strip()
+            if not prompt:
+                return {'statusCode': 200, 'headers': headers, 'body': json.dumps({'ok': True})}
+            aspect_ratio = input_data.get('aspectRatio', '16:9')
+            duration_sec = int(input_data.get('durationSec', 8))
+            reference_image = input_data.get('referenceImage')
+            _do_generate(job_id, prompt, aspect_ratio, duration_sec, reference_image=reference_image)
+            return {'statusCode': 200, 'headers': headers, 'body': json.dumps({'ok': True})}
+
         prompt = data.get('prompt', '').strip()
         aspect_ratio = data.get('aspectRatio', '16:9')
         duration_sec = int(data.get('durationSec', 8))
-        reference_image = data.get('referenceImage')  # optional: { mimeType, data } (base64)
+        reference_image = data.get('referenceImage')
 
         if not prompt:
             return {'statusCode': 400, 'headers': headers, 'body': json.dumps({'error': 'Укажите описание видео (prompt)'})}
@@ -214,22 +229,31 @@ def handler(event: dict, context) -> dict:
 
         import uuid
         job_id = uuid.uuid4().hex
-        ref_for_generate = None
+        input_payload = {'prompt': prompt, 'aspectRatio': aspect_ratio, 'durationSec': duration_sec}
         if reference_image and isinstance(reference_image, dict) and (reference_image.get('data') or reference_image.get('dataBase64')):
-            ref_b64 = reference_image.get('data') or reference_image.get('dataBase64')
-            ref_mime = reference_image.get('mimeType') or reference_image.get('mime_type') or 'image/png'
-            ref_for_generate = {'data': ref_b64, 'mimeType': ref_mime}
+            input_payload['referenceImage'] = {
+                'data': reference_image.get('data') or reference_image.get('dataBase64'),
+                'mimeType': reference_image.get('mimeType') or reference_image.get('mime_type') or 'image/png',
+            }
+        s3.put_object(
+            Bucket=bucket,
+            Key=f'veo/jobs/{job_id}/input.json',
+            Body=json.dumps(input_payload).encode(),
+            ContentType='application/json',
+        )
 
-        _do_generate(job_id, prompt, aspect_ratio, duration_sec, reference_image=ref_for_generate)
-
+        fn_url = os.environ.get('FUNCTION_URL', 'https://functions.yandexcloud.net/d4e3ca3cvftr0nqmnhtg')
         try:
-            r = s3.get_object(Bucket=bucket, Key=f'veo/jobs/{job_id}/status.json')
-            status_data = json.loads(r['Body'].read().decode())
-            if status_data.get('status') == 'done' and status_data.get('videoUrl'):
-                return {'statusCode': 200, 'headers': headers, 'body': json.dumps({'videoUrl': status_data['videoUrl']})}
-            return {'statusCode': 500, 'headers': headers, 'body': json.dumps({'error': status_data.get('error', 'Не удалось создать видео')})}
+            req = urllib.request.Request(
+                fn_url,
+                data=json.dumps({'_worker': True, 'jobId': job_id}).encode('utf-8'),
+                headers={'Content-Type': 'application/json'},
+                method='POST',
+            )
+            urllib.request.urlopen(req, timeout=3)
         except Exception as e:
-            return {'statusCode': 500, 'headers': headers, 'body': json.dumps({'error': str(e)})}
+            print(f'[generate-video] worker trigger: {e}')
+        return {'statusCode': 200, 'headers': headers, 'body': json.dumps({'jobId': job_id})}
 
     except Exception as e:
         return {'statusCode': 500, 'headers': headers, 'body': json.dumps({'error': str(e)})}

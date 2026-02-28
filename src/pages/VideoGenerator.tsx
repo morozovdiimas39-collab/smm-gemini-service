@@ -125,9 +125,9 @@ export default function VideoGenerator() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-        timeout: 360000,
+        timeout: 30000,
       });
-      const data = (await res.json()) as { videoUrl?: string; error?: string; message?: string };
+      const data = (await res.json()) as { jobId?: string; videoUrl?: string; error?: string; message?: string };
 
       if (!res.ok) {
         throw new Error(data.error || data.message || 'Не удалось создать видео');
@@ -135,9 +135,32 @@ export default function VideoGenerator() {
       if (data.videoUrl) {
         setVideoUrl(data.videoUrl);
         toast({ title: 'Готово! 🎬', description: 'Видео создано' });
-      } else {
-        throw new Error(data.error || 'Нет видео в ответе');
+        return;
       }
+      if (!data.jobId) {
+        throw new Error(data.error || 'Нет jobId');
+      }
+
+      const jobId = data.jobId;
+      const pollInterval = 5000;
+      const maxAttempts = 120;
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise((r) => setTimeout(r, pollInterval));
+        const pollRes = await longFetch(`${GENERATE_VIDEO_URL}?jobId=${jobId}`, {
+          method: 'GET',
+          timeout: 10000,
+        });
+        const pollData = (await pollRes.json()) as { status?: string; videoUrl?: string; error?: string };
+        if (pollData.status === 'done' && pollData.videoUrl) {
+          setVideoUrl(pollData.videoUrl);
+          toast({ title: 'Готово! 🎬', description: 'Видео создано' });
+          return;
+        }
+        if (pollData.status === 'error' || pollData.error) {
+          throw new Error(pollData.error || 'Ошибка генерации');
+        }
+      }
+      throw new Error('Превышено время ожидания (10 мин)');
     } catch (e) {
       toast({
         title: 'Ошибка генерации',
