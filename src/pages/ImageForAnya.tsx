@@ -40,6 +40,9 @@ export default function ImageForAnya() {
   const [referenceImage, setReferenceImage] = useState<{ mimeType: string; data: string; preview: string } | null>(null);
   const [generatedImageUrl, setGeneratedImageUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [timeoutTestSec, setTimeoutTestSec] = useState(60);
+  const [isTestingTimeout, setIsTestingTimeout] = useState(false);
+  const [timeoutTestResult, setTimeoutTestResult] = useState<string | null>(null);
 
   useEffect(() => {
     if (location.state?.initialPrompt) {
@@ -218,6 +221,32 @@ export default function ImageForAnya() {
     }
   };
 
+  const runTimeoutTest = async () => {
+    setIsTestingTimeout(true);
+    setTimeoutTestResult(null);
+    const start = Date.now();
+    try {
+      const res = await longFetch(GENERATE_IMAGE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ testTimeout: timeoutTestSec }),
+      });
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      const data = await res.json() as { ok?: boolean; slept_sec?: number };
+      if (data.ok && data.slept_sec != null) {
+        setTimeoutTestResult(`✅ Соединение держалось ${elapsed} с (сервер ждал ${data.slept_sec} с). Лимит не меньше ${timeoutTestSec} с.`);
+      } else {
+        setTimeoutTestResult(`⚠️ Ответ за ${elapsed} с, но без slept_sec: ${JSON.stringify(data)}`);
+      }
+    } catch (e) {
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      setTimeoutTestResult(`❌ Обрыв через ~${elapsed} с при тесте на ${timeoutTestSec} с. Запрос режет что-то до ${timeoutTestSec} с (шлюз, сеть или браузер).`);
+      console.error(e);
+    } finally {
+      setIsTestingTimeout(false);
+    }
+  };
+
   const selectedStyleData = styles.find(s => s.value === style);
   const selectedAspectData = aspectRatios.find(ar => ar.value === aspectRatio);
 
@@ -387,6 +416,38 @@ export default function ImageForAnya() {
                 </>
               )}
             </Button>
+
+            <div className="pt-4 border-t border-border space-y-2">
+              <Label className="text-sm font-medium text-muted-foreground">Диагностика таймаута</Label>
+              <p className="text-xs text-muted-foreground">
+                Узнать, через сколько секунд обрывается соединение.
+              </p>
+              <div className="flex gap-2 items-center flex-wrap">
+                <select
+                  value={timeoutTestSec}
+                  onChange={(e) => { setTimeoutTestSec(Number(e.target.value)); setTimeoutTestResult(null); }}
+                  className="flex h-9 rounded-md border border-input bg-background px-3 py-1 text-sm"
+                >
+                  {[30, 45, 60, 75, 90, 120].map((s) => (
+                    <option key={s} value={s}>{s} с</option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={runTimeoutTest}
+                  disabled={isTestingTimeout || isGenerating}
+                >
+                  {isTestingTimeout ? `Ждём ${timeoutTestSec} с...` : 'Проверить'}
+                </Button>
+              </div>
+              {timeoutTestResult && (
+                <p className="text-xs text-muted-foreground bg-muted/50 p-2 rounded break-words">
+                  {timeoutTestResult}
+                </p>
+              )}
+            </div>
           </Card>
 
           <Card className="md:col-span-3 p-6 space-y-4 shadow-xl border-2 hover:border-primary/50 transition-all duration-300">
@@ -442,7 +503,7 @@ export default function ImageForAnya() {
           <p className="flex items-center justify-center gap-2">
             Powered by
             <span className="font-semibold bg-gradient-to-r from-secondary to-accent bg-clip-text text-transparent">
-              Gemini
+              Gemini 2.5 Flash Image
             </span>
             ✨
           </p>
