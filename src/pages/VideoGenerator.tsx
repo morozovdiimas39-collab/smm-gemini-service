@@ -1,13 +1,14 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/hooks/use-toast';
 import Icon from '@/components/ui/icon';
 
-const GENERATE_VIDEO_URL = 'https://functions.yandexcloud.net/d4e3ca3cvftr0nqmnhtg';
+const GEMINI_KEY_STORAGE = 'gemini_api_key_video';
 
 const videoAspectRatios = [
   { value: '16:9', label: '◻️ 16:9 Горизонтальный', description: 'YouTube, экран' },
@@ -21,33 +22,10 @@ const durations = [
   { value: 8, label: '8 сек' },
 ];
 
-function longFetch(
-  url: string,
-  options: { method?: string; headers?: Record<string, string>; body?: string; timeout?: number }
-): Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open(options.method || 'GET', url);
-    xhr.timeout = options.timeout ?? 360000; // 6 мин — генерация синхронная
-    if (options.headers) {
-      for (const [k, v] of Object.entries(options.headers)) xhr.setRequestHeader(k, v);
-    }
-    xhr.onload = () => {
-      resolve({
-        ok: xhr.status >= 200 && xhr.status < 300,
-        status: xhr.status,
-        json: () => Promise.resolve(JSON.parse(xhr.responseText || 'null')),
-      });
-    };
-    xhr.onerror = () => reject(new TypeError('Соединение разорвано. Проверьте таймаут функции в Yandex Cloud.'));
-    xhr.ontimeout = () => reject(new TypeError('Превышено время ожидания. Генерация видео занимает 2–5 минут.'));
-    xhr.send(options.body ?? undefined);
-  });
-}
-
 export default function VideoGenerator() {
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const videoUrlRef = useRef<string>('');
   const [prompt, setPrompt] = useState('');
   const [aspectRatio, setAspectRatio] = useState('16:9');
   const [durationSec, setDurationSec] = useState(8);
@@ -56,6 +34,12 @@ export default function VideoGenerator() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatingElapsedSec, setGeneratingElapsedSec] = useState(0);
   const elapsedIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [geminiKeyInput, setGeminiKeyInput] = useState('');
+  const [hasGeminiKey, setHasGeminiKey] = useState(false);
+
+  useEffect(() => {
+    setHasGeminiKey(!!localStorage.getItem(GEMINI_KEY_STORAGE)?.trim());
+  }, []);
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -86,81 +70,86 @@ export default function VideoGenerator() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const generateVideo = async () => {
-    if (!prompt.trim()) {
-      toast({
-        title: 'Ошибка',
-        description: 'Опишите, какое видео хотите получить',
-        variant: 'destructive',
-      });
+  const saveGeminiKey = () => {
+    const key = geminiKeyInput.trim();
+    if (!key) {
+      toast({ title: 'Введите ключ', variant: 'destructive' });
       return;
     }
-    if (!GENERATE_VIDEO_URL) {
+    localStorage.setItem(GEMINI_KEY_STORAGE, key);
+    setHasGeminiKey(true);
+    setGeminiKeyInput('');
+    toast({ title: 'Ключ сохранён', description: 'Используется только в этом браузере для генерации видео' });
+  };
+
+  const generateVideo = async () => {
+    if (!prompt.trim()) {
+      toast({ title: 'Ошибка', description: 'Опишите, какое видео хотите получить', variant: 'destructive' });
+      return;
+    }
+    const apiKey = localStorage.getItem(GEMINI_KEY_STORAGE)?.trim();
+    if (!apiKey) {
       toast({
-        title: 'Не настроено',
-        description: 'Добавьте URL облачной функции generate-video в коде (VideoGenerator.tsx)',
+        title: 'Нужен API ключ Gemini',
+        description: 'Введите ключ ниже и нажмите «Сохранить». Ключ берётся в Google AI Studio.',
         variant: 'destructive',
       });
       return;
     }
 
     setIsGenerating(true);
+    if (videoUrlRef.current) {
+      URL.revokeObjectURL(videoUrlRef.current);
+      videoUrlRef.current = '';
+    }
     setVideoUrl('');
     setGeneratingElapsedSec(0);
-    elapsedIntervalRef.current = setInterval(() => {
-      setGeneratingElapsedSec((s) => s + 1);
-    }, 1000);
+    elapsedIntervalRef.current = setInterval(() => setGeneratingElapsedSec((s) => s + 1), 1000);
 
     try {
-      const body: { prompt: string; aspectRatio: string; durationSec: number; referenceImage?: { mimeType: string; data: string } } = {
+      const { GoogleGenAI } = await import(/* @vite-ignore */ '@google/genai');
+      const ai = new GoogleGenAI({ apiKey });
+
+      const durationSecFinal = referenceImage ? 8 : durationSec;
+      const params: {
+        model: string;
+        prompt: string;
+        config: { numberOfVideos: number; aspectRatio: string; durationSeconds?: number };
+        image?: { inlineData?: { mimeType: string; data: string } };
+      } = {
+        model: 'veo-3.1-generate-preview',
         prompt: prompt.trim(),
-        aspectRatio,
-        durationSec,
+        config: {
+          numberOfVideos: 1,
+          aspectRatio,
+          durationSeconds: durationSecFinal,
+        },
       };
       if (referenceImage) {
-        body.referenceImage = { mimeType: referenceImage.mimeType, data: referenceImage.data };
+        params.image = { inlineData: { mimeType: referenceImage.mimeType, data: referenceImage.data } };
       }
 
-      const res = await longFetch(GENERATE_VIDEO_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        timeout: 30000,
-      });
-      const data = (await res.json()) as { jobId?: string; videoUrl?: string; error?: string; message?: string };
+      let operation = await ai.models.generateVideos(params as never);
 
-      if (!res.ok) {
-        throw new Error(data.error || data.message || 'Не удалось создать видео');
-      }
-      if (data.videoUrl) {
-        setVideoUrl(data.videoUrl);
-        toast({ title: 'Готово! 🎬', description: 'Видео создано' });
-        return;
-      }
-      if (!data.jobId) {
-        throw new Error(data.error || 'Нет jobId');
+      while (!operation.done) {
+        await new Promise((r) => setTimeout(r, 10000));
+        operation = await ai.operations.getVideosOperation({ operation });
       }
 
-      const jobId = data.jobId;
-      const pollInterval = 5000;
-      const maxAttempts = 120;
-      for (let i = 0; i < maxAttempts; i++) {
-        await new Promise((r) => setTimeout(r, pollInterval));
-        const pollRes = await longFetch(`${GENERATE_VIDEO_URL}?jobId=${jobId}`, {
-          method: 'GET',
-          timeout: 10000,
-        });
-        const pollData = (await pollRes.json()) as { status?: string; videoUrl?: string; error?: string };
-        if (pollData.status === 'done' && pollData.videoUrl) {
-          setVideoUrl(pollData.videoUrl);
-          toast({ title: 'Готово! 🎬', description: 'Видео создано' });
-          return;
-        }
-        if (pollData.status === 'error' || pollData.error) {
-          throw new Error(pollData.error || 'Ошибка генерации');
-        }
+      const resp = operation.response as { generatedVideos?: Array<{ video?: { uri?: string } }> } | undefined;
+      const uri = resp?.generatedVideos?.[0]?.video?.uri;
+      if (!uri) {
+        throw new Error((operation as { error?: string }).error || 'Нет видео в ответе');
       }
-      throw new Error('Превышено время ожидания (10 мин)');
+
+      const downloadUrl = uri + (uri.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(apiKey);
+      const res = await fetch(downloadUrl);
+      if (!res.ok) throw new Error('Не удалось скачать видео');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      videoUrlRef.current = url;
+      setVideoUrl(url);
+      toast({ title: 'Готово! 🎬', description: 'Видео создано' });
     } catch (e) {
       toast({
         title: 'Ошибка генерации',
@@ -219,6 +208,36 @@ export default function VideoGenerator() {
 
         <div className="grid md:grid-cols-5 gap-6">
           <Card className="md:col-span-2 p-6 space-y-6 shadow-xl border-2 hover:border-secondary/50 transition-all duration-300">
+            <div className="space-y-2">
+              <Label className="text-lg font-semibold flex items-center gap-2">
+                <Icon name="Lock" size={20} className="text-secondary" />
+                Свой API ключ Gemini (для видео)
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                Ключ берётся в{' '}
+                <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="underline">
+                  Google AI Studio
+                </a>
+                . Хранится только в этом браузере, запросы идут напрямую в Google.
+              </p>
+              {hasGeminiKey ? (
+                <p className="text-sm text-green-600 dark:text-green-400">✓ Ключ сохранён</p>
+              ) : (
+                <div className="flex gap-2">
+                  <Input
+                    type="password"
+                    placeholder="AIza..."
+                    value={geminiKeyInput}
+                    onChange={(e) => setGeminiKeyInput(e.target.value)}
+                    className="flex-1"
+                  />
+                  <Button type="button" variant="secondary" onClick={saveGeminiKey}>
+                    Сохранить
+                  </Button>
+                </div>
+              )}
+            </div>
+
             <div className="space-y-2">
               <Label className="text-lg font-semibold flex items-center gap-2">
                 <Icon name="Image" size={20} className="text-secondary" />
@@ -319,7 +338,7 @@ export default function VideoGenerator() {
 
             <Button
               onClick={generateVideo}
-              disabled={isGenerating || !GENERATE_VIDEO_URL}
+              disabled={isGenerating || !hasGeminiKey}
               size="lg"
               className="w-full h-14 text-lg font-bold bg-gradient-to-r from-secondary to-accent hover:opacity-90 transition-all duration-300 shadow-lg"
             >
@@ -335,10 +354,8 @@ export default function VideoGenerator() {
                 </>
               )}
             </Button>
-            {!GENERATE_VIDEO_URL && (
-              <p className="text-xs text-amber-600">
-                Сначала задеплойте функцию generate-video и укажите её URL в VideoGenerator.tsx
-              </p>
+            {!hasGeminiKey && (
+              <p className="text-xs text-amber-600">Сначала введите и сохраните API ключ Gemini выше.</p>
             )}
           </Card>
 

@@ -169,8 +169,39 @@ def handler(event: dict, context) -> dict:
         }
 
     if method == 'GET':
-        # Polling: ?jobId=xxx
         params = event.get('queryStringParameters') or {}
+        # Триггер по расписанию: GET ?cron=1 — обработать одну ожидающую задачу (без самовызова)
+        if params.get('cron') == '1' or params.get('cron') == os.environ.get('CRON_SECRET', ''):
+            s3, bucket = _get_s3()
+            if not s3:
+                return {'statusCode': 500, 'headers': headers, 'body': json.dumps({'error': 'S3 не настроен'})}
+            try:
+                paginator = s3.get_paginator('list_objects_v2')
+                seen_jobs = set()
+                for page in paginator.paginate(Bucket=bucket, Prefix='veo/jobs/'):
+                    for obj in page.get('Contents') or []:
+                        key = obj.get('Key') or ''
+                        if key.endswith('/input.json'):
+                            job_id = key.split('/')[2] if len(key.split('/')) >= 3 else None
+                            if job_id and job_id not in seen_jobs:
+                                seen_jobs.add(job_id)
+                                try:
+                                    s3.head_object(Bucket=bucket, Key=f'veo/jobs/{job_id}/status.json')
+                                except Exception:
+                                    r = s3.get_object(Bucket=bucket, Key=f'veo/jobs/{job_id}/input.json')
+                                    input_data = json.loads(r['Body'].read().decode())
+                                    prompt = (input_data.get('prompt') or '').strip()
+                                    if prompt:
+                                        aspect_ratio = input_data.get('aspectRatio', '16:9')
+                                        duration_sec = int(input_data.get('durationSec', 8))
+                                        reference_image = input_data.get('referenceImage')
+                                        _do_generate(job_id, prompt, aspect_ratio, duration_sec, reference_image=reference_image)
+                                    return {'statusCode': 200, 'headers': headers, 'body': json.dumps({'ok': True, 'jobId': job_id})}
+                return {'statusCode': 200, 'headers': headers, 'body': json.dumps({'ok': True, 'pending': 0})}
+            except Exception as e:
+                return {'statusCode': 500, 'headers': headers, 'body': json.dumps({'error': str(e)})}
+
+        # Polling: ?jobId=xxx
         job_id = params.get('jobId')
         if not job_id:
             return {'statusCode': 400, 'headers': headers, 'body': json.dumps({'error': 'Укажите jobId'})}
