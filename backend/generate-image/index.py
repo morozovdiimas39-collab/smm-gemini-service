@@ -55,6 +55,7 @@ def handler(event: dict, context) -> dict:
         style = request_data.get('style', 'фотореализм')
         aspect_ratio = request_data.get('aspectRatio', 'квадрат')
         image_model = request_data.get('imageModel', 'flash')  # 'flash' | 'pro'
+        image_provider = request_data.get('imageProvider', request_data.get('provider', 'gemini'))  # 'gemini' | 'yandex'
         reference_image = request_data.get('referenceImage')  # optional: base64 string or { "mimeType": "...", "data": "..." }
 
         if not task:
@@ -85,7 +86,7 @@ def handler(event: dict, context) -> dict:
         has_reference = False
         ref_mime = 'image/png'
         ref_b64 = None
-        if reference_image:
+        if reference_image and image_provider != 'yandex':
             if isinstance(reference_image, dict):
                 ref_b64 = reference_image.get('data') or reference_image.get('dataBase64')
                 ref_mime = reference_image.get('mimeType') or reference_image.get('mime_type') or 'image/png'
@@ -119,7 +120,116 @@ def handler(event: dict, context) -> dict:
             '4_5': '4:5',
             '5_4': '5:4',
         }
+        # Yandex ART: widthRatio, heightRatio — строки (например "1","1", "16","9")
+        aspect_to_yandex = {
+            'квадрат': ('1', '1'),
+            'горизонтальный': ('16', '9'),
+            'вертикальный': ('9', '16'),
+            'горизонтальный_широкий': ('3', '2'),
+            '4_3': ('4', '3'),
+            '3_4': ('3', '4'),
+            '21_9': ('21', '9'),
+            '4_5': ('4', '5'),
+            '5_4': ('5', '4'),
+        }
         gemini_aspect = aspect_to_gemini.get(aspect_ratio, '1:1')
+        yandex_w, yandex_h = aspect_to_yandex.get(aspect_ratio, ('1', '1'))
+
+        if image_provider == 'yandex':
+            yandex_api_key = os.environ.get('YANDEX_API_KEY')
+            yandex_folder_id = os.environ.get('YANDEX_FOLDER_ID')
+            proxy_url = os.environ.get('PROXY_URL')
+            if not yandex_api_key or not yandex_folder_id:
+                return {
+                    'statusCode': 500,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'error': 'YANDEX_API_KEY или YANDEX_FOLDER_ID не настроены'})
+                }
+            model_uri = f'art://{yandex_folder_id}/yandex-art/latest'
+            art_body = {
+                'modelUri': model_uri,
+                'messages': [{'text': prompt}],
+                'generationOptions': {
+                    'seed': str((hash(prompt) % 10**9) + 10**9),
+                    'aspectRatio': {'widthRatio': yandex_w, 'heightRatio': yandex_h}
+                }
+            }
+            art_url = 'https://llm.api.cloud.yandex.net/foundationModels/v1/imageGenerationAsync'
+            req = urllib.request.Request(
+                art_url,
+                data=json.dumps(art_body).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Api-Key {yandex_api_key}'
+                }
+            )
+            if proxy_url:
+                proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
+                opener = urllib.request.build_opener(proxy_handler)
+                urllib.request.install_opener(opener)
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    op_data = json.loads(resp.read().decode('utf-8'))
+            except urllib.error.HTTPError as e:
+                err_b = e.read().decode('utf-8') if e.fp else ''
+                return {
+                    'statusCode': 500,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'error': f'Yandex ART: {e.code}', 'details': err_b[:400]})
+                }
+            op_id = op_data.get('id')
+            if not op_id:
+                return {
+                    'statusCode': 500,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'error': 'Yandex ART не вернул id операции', 'details': str(op_data)[:300]})
+                }
+            op_url = f'https://operation.api.cloud.yandex.net/operations/{op_id}'
+            op_req_headers = {'Authorization': f'Api-Key {yandex_api_key}'}
+            if proxy_url:
+                proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
+                opener = urllib.request.build_opener(proxy_handler)
+                urllib.request.install_opener(opener)
+            max_poll_sec = 180
+            poll_interval = 5
+            t_art_start = time.time()
+            while (time.time() - t_art_start) < max_poll_sec:
+                op_req = urllib.request.Request(op_url, headers=op_req_headers)
+                try:
+                    with urllib.request.urlopen(op_req, timeout=30) as op_resp:
+                        op_result = json.loads(op_resp.read().decode('utf-8'))
+                except urllib.error.HTTPError as e:
+                    return {
+                        'statusCode': 500,
+                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                        'body': json.dumps({'error': f'Yandex операция: {e.code}'})
+                    }
+                if op_result.get('done'):
+                    response_data = op_result.get('response') or {}
+                    image_b64_art = response_data.get('image')
+                    if image_b64_art:
+                        image_url_art = f"data:image/png;base64,{image_b64_art}"
+                        total_art = round(time.time() - t0, 1)
+                        return {
+                            'statusCode': 200,
+                            'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                            'body': json.dumps({
+                                'imageUrl': image_url_art,
+                                'prompt': prompt,
+                                'debug': {'total_sec': total_art, 'provider': 'yandex'}
+                            })
+                        }
+                    return {
+                        'statusCode': 500,
+                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                        'body': json.dumps({'error': 'В ответе Yandex ART нет изображения'})
+                    }
+                time.sleep(poll_interval)
+            return {
+                'statusCode': 500,
+                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'body': json.dumps({'error': 'Yandex ART: генерация заняла слишком много времени. Попробуйте позже.'})
+            }
 
         api_key = os.environ.get('GEMINI_API_KEY')
         proxy_url = os.environ.get('PROXY_URL')

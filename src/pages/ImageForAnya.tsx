@@ -36,6 +36,7 @@ export default function ImageForAnya() {
   const [task, setTask] = useState('');
   const [style, setStyle] = useState('как_на_картинке');
   const [aspectRatio, setAspectRatio] = useState('квадрат');
+  const [imageProvider, setImageProvider] = useState<'gemini' | 'yandex'>('gemini');
   const [imageModel, setImageModel] = useState<'flash' | 'pro'>('flash');
   const [referenceImage, setReferenceImage] = useState<{ mimeType: string; data: string; preview: string } | null>(null);
   const [generatedImageUrl, setGeneratedImageUrl] = useState('');
@@ -121,7 +122,7 @@ export default function ImageForAnya() {
       });
       return;
     }
-    if (!referenceImage) {
+    if (imageProvider === 'gemini' && !referenceImage) {
       toast({
         title: 'Ошибка',
         description: 'Загрузите картинку, на основе которой создать образ',
@@ -138,7 +139,8 @@ export default function ImageForAnya() {
       style,
       aspectRatio,
       imageModel,
-      referenceImage: { mimeType: referenceImage.mimeType, data: referenceImage.data },
+      imageProvider,
+      referenceImage: referenceImage ? { mimeType: referenceImage.mimeType, data: referenceImage.data } : undefined,
     });
     const maxAttempts = 4;
     const retryDelays = [0, 5000, 15000, 25000];
@@ -349,6 +351,24 @@ export default function ImageForAnya() {
 
             <div className="space-y-2">
               <Label className="text-lg font-semibold flex items-center gap-2">
+                <Icon name="Server" size={20} className="text-secondary" />
+                Провайдер
+              </Label>
+              <select
+                value={imageProvider}
+                onChange={(e) => setImageProvider(e.target.value as 'gemini' | 'yandex')}
+                className="flex h-12 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              >
+                <option value="gemini">⚡ Gemini (по образцу)</option>
+                <option value="yandex">🔶 Yandex ART (только по описанию)</option>
+              </select>
+              {imageProvider === 'yandex' && (
+                <p className="text-xs text-muted-foreground">Yandex ART не использует картинку-образец.</p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-lg font-semibold flex items-center gap-2">
                 <Icon name="Palette" size={20} className="text-secondary" />
                 Стиль
               </Label>
@@ -374,7 +394,8 @@ export default function ImageForAnya() {
               <select
                 value={imageModel}
                 onChange={(e) => setImageModel(e.target.value as 'flash' | 'pro')}
-                className="flex h-12 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                disabled={imageProvider === 'yandex'}
+                className="flex h-12 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-60"
               >
                 <option value="flash">⚡ Быстрая (Flash)</option>
                 <option value="pro">✨ Nano Banana</option>
@@ -402,7 +423,7 @@ export default function ImageForAnya() {
 
             <Button
               onClick={generateImage}
-              disabled={isGenerating || !referenceImage}
+              disabled={isGenerating || (imageProvider === 'gemini' && !referenceImage)}
               size="lg"
               className="w-full h-14 text-lg font-bold bg-gradient-to-r from-secondary to-accent hover:opacity-90 transition-all duration-300 shadow-lg hover:shadow-xl"
             >

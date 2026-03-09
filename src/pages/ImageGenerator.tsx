@@ -34,6 +34,7 @@ export default function ImageGenerator() {
   const [task, setTask] = useState('');
   const [style, setStyle] = useState('фотореализм');
   const [aspectRatio, setAspectRatio] = useState('квадрат');
+  const [imageProvider, setImageProvider] = useState<'gemini' | 'yandex'>('gemini');
   const [imageModel, setImageModel] = useState<'flash' | 'pro'>('flash');
   const [generatedImageUrl, setGeneratedImageUrl] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
@@ -92,7 +93,7 @@ export default function ImageGenerator() {
     setGeneratedImageUrl('');
 
     const url = 'https://functions.yandexcloud.net/d4e0l4059mc7lrjj3d3b';
-    const body = JSON.stringify({ task, style, aspectRatio, imageModel });
+    const body = JSON.stringify({ task, style, aspectRatio, imageModel, imageProvider });
     const maxAttempts = 4;
     const retryDelays = [0, 5000, 15000, 25000];
 
@@ -285,19 +286,35 @@ export default function ImageGenerator() {
 
             <div className="space-y-2">
               <Label className="text-lg font-semibold flex items-center gap-2">
+                <Icon name="Server" size={20} className="text-secondary" />
+                Провайдер
+              </Label>
+              <select
+                value={imageProvider}
+                onChange={(e) => setImageProvider(e.target.value as 'gemini' | 'yandex')}
+                className="flex h-12 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              >
+                <option value="gemini">⚡ Gemini (Flash / Pro)</option>
+                <option value="yandex">🔶 Yandex ART</option>
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-lg font-semibold flex items-center gap-2">
                 <Icon name="Cpu" size={20} className="text-secondary" />
                 Модель
               </Label>
               <select
                 value={imageModel}
                 onChange={(e) => setImageModel(e.target.value as 'flash' | 'pro')}
-                className="flex h-12 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                disabled={imageProvider === 'yandex'}
+                className="flex h-12 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:opacity-60"
               >
                 <option value="flash">⚡ Быстрая (Flash) — быстрее, экономнее</option>
                 <option value="pro">✨ Nano Banana — лучше детали</option>
               </select>
               <p className="text-xs text-muted-foreground">
-                {imageModel === 'pro' ? 'Nano Banana: выше качество и детализация.' : 'Gemini 2.5 Flash: быстрая генерация.'}
+                {imageProvider === 'yandex' ? 'Yandex ART: одна модель, может занять 1–3 минуты.' : imageModel === 'pro' ? 'Nano Banana: выше качество и детализация.' : 'Gemini 2.5 Flash: быстрая генерация.'}
               </p>
             </div>
 
@@ -433,7 +450,7 @@ export default function ImageGenerator() {
           <p className="flex items-center justify-center gap-2">
             Powered by
             <span className="font-semibold bg-gradient-to-r from-secondary to-accent bg-clip-text text-transparent">
-              Gemini 2.5 Flash Image
+              Gemini & Yandex ART
             </span>
             ✨
           </p>

@@ -37,6 +37,7 @@ def handler(event: dict, context) -> dict:
         goal = request_data.get('goal', 'вовлечение')
         length = request_data.get('length', 'средний')
         emojis = request_data.get('emojis', 'баланс')
+        provider = request_data.get('provider', 'gemini')  # 'gemini' | 'yandex'
         
         if not task:
             return {
@@ -91,6 +92,60 @@ def handler(event: dict, context) -> dict:
 - Эмодзи: {emoji_desc.get(emojis, 'использовать 3-5 эмодзи')}
 
 Напиши готовый пост для {platform_names.get(platform, '')} канала/группы AnyaGPT. Только текст поста, без пояснений."""
+        
+        if provider == 'yandex':
+            yandex_api_key = os.environ.get('YANDEX_API_KEY')
+            yandex_folder_id = os.environ.get('YANDEX_FOLDER_ID')
+            proxy_url = os.environ.get('PROXY_URL')
+            if not yandex_api_key or not yandex_folder_id:
+                return {
+                    'statusCode': 500,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'error': 'YANDEX_API_KEY или YANDEX_FOLDER_ID не настроены'})
+                }
+            yandex_url = 'https://llm.api.cloud.yandex.net/llm/v1alpha/instruct'
+            yandex_body = {
+                'model': 'general',
+                'generationOptions': {'partialResults': False, 'temperature': 0.6, 'maxTokens': 2000},
+                'instructionText': 'Ты копирайтер. Пиши только готовый текст поста, без пояснений и заголовков.',
+                'requestText': prompt
+            }
+            req = urllib.request.Request(
+                yandex_url,
+                data=json.dumps(yandex_body).encode('utf-8'),
+                headers={
+                    'Content-Type': 'application/json',
+                    'Authorization': f'Api-Key {yandex_api_key}',
+                    'x-folder-id': yandex_folder_id
+                }
+            )
+            if proxy_url:
+                proxy_handler = urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})
+                opener = urllib.request.build_opener(proxy_handler)
+                urllib.request.install_opener(opener)
+            try:
+                with urllib.request.urlopen(req, timeout=60) as response:
+                    yandex_response = json.loads(response.read().decode('utf-8'))
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode('utf-8') if e.fp else ''
+                return {
+                    'statusCode': 500,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'error': f'Yandex GPT: {e.code}', 'details': err_body[:500]})
+                }
+            result = yandex_response.get('result', {}).get('alternatives')
+            if result and len(result) > 0 and result[0].get('text'):
+                generated_text = result[0]['text'].strip()
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                    'body': json.dumps({'post': generated_text})
+                }
+            return {
+                'statusCode': 500,
+                'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                'body': json.dumps({'error': 'Не удалось получить ответ от Yandex GPT', 'details': str(yandex_response)[:300]})
+            }
         
         gemini_api_key = os.environ.get('GEMINI_API_KEY')
         proxy_url = os.environ.get('PROXY_URL')

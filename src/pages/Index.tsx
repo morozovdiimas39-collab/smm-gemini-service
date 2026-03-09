@@ -16,6 +16,7 @@ export default function Index() {
   const [goal, setGoal] = useState('вовлечение');
   const [length, setLength] = useState('средний');
   const [emojis, setEmojis] = useState('баланс');
+  const [postProvider, setPostProvider] = useState<'gemini' | 'yandex'>('gemini');
   const [generatedPost, setGeneratedPost] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
 
@@ -44,7 +45,8 @@ export default function Index() {
           tone,
           goal,
           length,
-          emojis
+          emojis,
+          provider: postProvider
         }),
       });
 
@@ -132,6 +134,21 @@ export default function Index() {
 
         <div className="grid md:grid-cols-2 gap-6">
           <Card className="p-6 space-y-6 shadow-xl border-2 hover:border-primary/50 transition-all duration-300">
+            <div className="space-y-2">
+              <Label className="text-lg font-semibold flex items-center gap-2">
+                <Icon name="Cpu" size={20} className="text-primary" />
+                Провайдер
+              </Label>
+              <select
+                value={postProvider}
+                onChange={(e) => setPostProvider(e.target.value as 'gemini' | 'yandex')}
+                className="flex h-12 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+              >
+                <option value="gemini">⚡ Gemini 2.5 Flash</option>
+                <option value="yandex">🔶 Yandex GPT</option>
+              </select>
+            </div>
+
             <div className="space-y-2">
               <Label className="text-lg font-semibold flex items-center gap-2">
                 <Icon name="MessageSquare" size={20} className="text-primary" />
@@ -318,7 +335,7 @@ export default function Index() {
           <p className="flex items-center justify-center gap-2">
             Powered by
             <span className="font-semibold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
-              Gemini 2.5 Flash
+              Gemini & Yandex
             </span>
             ⚡
           </p>
