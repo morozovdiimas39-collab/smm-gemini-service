@@ -103,20 +103,22 @@ def handler(event: dict, context) -> dict:
                     'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
                     'body': json.dumps({'error': 'YANDEX_API_KEY или YANDEX_FOLDER_ID не настроены'})
                 }
-            yandex_url = 'https://llm.api.cloud.yandex.net/llm/v1alpha/instruct'
+            yandex_url = 'https://llm.api.cloud.yandex.net/foundationModels/v1/completion'
+            model_uri = f'gpt://{yandex_folder_id}/yandexgpt/latest'
             yandex_body = {
-                'model': 'general',
-                'generationOptions': {'partialResults': False, 'temperature': 0.6, 'maxTokens': 2000},
-                'instructionText': 'Ты копирайтер. Пиши только готовый текст поста, без пояснений и заголовков.',
-                'requestText': prompt
+                'modelUri': model_uri,
+                'completionOptions': {'temperature': 0.6, 'maxTokens': 2000, 'stream': False},
+                'messages': [
+                    {'role': 'system', 'text': 'Ты копирайтер. Пиши только готовый текст поста, без пояснений и заголовков.'},
+                    {'role': 'user', 'text': prompt}
+                ]
             }
             req = urllib.request.Request(
                 yandex_url,
                 data=json.dumps(yandex_body).encode('utf-8'),
                 headers={
                     'Content-Type': 'application/json',
-                    'Authorization': f'Api-Key {yandex_api_key}',
-                    'x-folder-id': yandex_folder_id
+                    'Authorization': f'Api-Key {yandex_api_key}'
                 }
             )
             if proxy_url:
@@ -134,13 +136,15 @@ def handler(event: dict, context) -> dict:
                     'body': json.dumps({'error': f'Yandex GPT: {e.code}', 'details': err_body[:500]})
                 }
             result = yandex_response.get('result', {}).get('alternatives')
-            if result and len(result) > 0 and result[0].get('text'):
-                generated_text = result[0]['text'].strip()
-                return {
-                    'statusCode': 200,
-                    'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
-                    'body': json.dumps({'post': generated_text})
-                }
+            if result and len(result) > 0:
+                alt = result[0]
+                generated_text = (alt.get('message', {}).get('text') or alt.get('text') or '').strip()
+                if generated_text:
+                    return {
+                        'statusCode': 200,
+                        'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},
+                        'body': json.dumps({'post': generated_text})
+                    }
             return {
                 'statusCode': 500,
                 'headers': {'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*'},

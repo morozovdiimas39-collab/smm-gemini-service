@@ -12,7 +12,7 @@ const GEMINI_KEY_STORAGE = 'gemini_api_key_video';
 
 const videoModels = [
   { id: 'veo-3.1-generate-preview', label: 'Veo 3.1', description: 'Новейшая модель (превью)' },
-  { id: 'veo-2.0-generate-001', label: 'Veo 2', description: 'Стабильная версия' },
+  { id: 'veo-3.1-fast-generate-001', label: 'Veo 3.1 Fast', description: 'Быстрее (ускоренная)' },
 ];
 
 const videoAspectRatios = [
